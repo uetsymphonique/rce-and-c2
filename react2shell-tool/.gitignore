@@ -5,3 +5,4 @@ package-lock.json
 *.b64
 *.exe
 __pycache__/
+*.elif
