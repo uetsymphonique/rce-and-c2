@@ -6,3 +6,4 @@ package-lock.json
 *.exe
 __pycache__/
 *.elif
+*.dmp
