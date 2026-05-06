@@ -17,7 +17,7 @@ GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
 # full agent
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
   -X main.DefaultServer=192.168.1.100 \
-  -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e \
+  -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e" \
   -o dnscat2.exe ./cmd/dnscat/
 ```
 

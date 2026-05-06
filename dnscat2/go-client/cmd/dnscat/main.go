@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
-	"strings"
 	"time"
 
 	"dnscat2/pkg/controller"
@@ -213,25 +212,6 @@ func newCommandSession(name string) (*session.Session, error) {
 	sess.IsCommand = true
 
 	return sess, nil
-}
-
-// getSystemDNS tries to get the system DNS server
-func getSystemDNS() string {
-	// Try reading /etc/resolv.conf
-	data, err := os.ReadFile("/etc/resolv.conf")
-	if err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if strings.HasPrefix(line, "nameserver") {
-				parts := strings.Fields(line)
-				if len(parts) >= 2 {
-					return parts[1]
-				}
-			}
-		}
-	}
-	return ""
 }
 
 func stringOrNull(s string) string {

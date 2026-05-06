@@ -10,6 +10,7 @@ A Golang implementation of the dnscat2 client, fully compatible with the origina
 - ✅ Multiple DNS record types (TXT, CNAME, MX, A, AAAA)
 - ✅ Cross-platform (Windows, Linux, macOS)
 - ✅ Single binary, no dependencies
+- ✅ Windows DNS auto-detection via registry (domain-joined environments)
 
 ## Building
 
@@ -52,7 +53,7 @@ With pre-shared secret:
 
 | Option                | Description                            | Default      |
 | --------------------- | -------------------------------------- | ------------ |
-| `--dns-server=<host>` | DNS server IP address                  | System DNS   |
+| `--dns-server=<host>` | DNS server IP address                  | System DNS (see below) |
 | `--dns-port=<port>`   | DNS server port                        | 53           |
 | `--dns-type=<types>`  | DNS record types (TXT,CNAME,MX,A,AAAA) | TXT,CNAME,MX |
 | `--secret=<hex>`      | Pre-shared secret for authentication   | None         |
@@ -111,19 +112,23 @@ Server commands:
 ## Architecture
 
 ```
-cmd/dnscat/          - Main entry point
+cmd/dnscat/                  - Main entry point
+  ├── main.go                - CLI flags, session setup, DNS driver bootstrap
+  ├── getdns_windows.go      - Windows DNS resolver: reads registry (build tag: windows)
+  └── getdns_unix.go         - Unix DNS resolver: reads /etc/resolv.conf (build tag: !windows)
+cmd/dnscat-service/          - Windows Service wrapper (build tag: windows)
 pkg/
-  ├── protocol/      - dnscat2 protocol packets (SYN, MSG, FIN, ENC, PING)
-  ├── crypto/        - Encryption layer (ECDH, Salsa20, SHA3)
-  ├── session/       - Session state machine
-  ├── controller/    - Session management
-  ├── driver/        - Application drivers
-  │   ├── console.go - Console driver
-  │   ├── exec.go    - Process execution driver
-  │   ├── ping.go    - Ping driver
-  │   └── command/   - Command protocol driver
+  ├── protocol/              - dnscat2 protocol packets (SYN, MSG, FIN, ENC, PING)
+  ├── crypto/                - Encryption layer (ECDH, Salsa20, SHA3)
+  ├── session/               - Session state machine
+  ├── controller/            - Session management
+  ├── driver/                - Application drivers
+  │   ├── console.go         - Console driver
+  │   ├── exec.go            - Process execution driver
+  │   ├── ping.go            - Ping driver
+  │   └── command/           - Command protocol driver
   └── tunnel/
-      └── dns/       - DNS tunnel transport
+      └── dns/               - DNS tunnel transport
 ```
 
 ## Protocol Compatibility
@@ -150,6 +155,23 @@ This Go client is fully compatible with the official dnscat2 server:
 - The secret must match on both client and server
 - Without `--secret`, connections use SAS verification (less secure)
 - Use `--no-encryption` only for testing/debugging
+
+## DNS Server Resolution
+
+When `--dns-server` is not specified (and `DefaultServer` is not hardcoded at
+build time), the client resolves the DNS server to use as follows:
+
+| Platform | Source | Fallback |
+|---|---|---|
+| **Windows** | `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\NameServer` then `DhcpNameServer` — all interface GUIDs enumerated, first non-empty IP returned | `8.8.8.8` |
+| **Linux / macOS** | First `nameserver` entry in `/etc/resolv.conf` | `8.8.8.8` |
+
+On domain-joined Windows machines this returns the DC's DNS IP (e.g.
+`10.12.10.10`), enabling **domain mode** tunneling through the internal DNS
+forwarder without hardcoding an IP in the binary.
+
+> **Note:** The registry key is readable by any user (standard `KEY_READ` ACL).
+> No elevation required.
 
 ## Troubleshooting
 
