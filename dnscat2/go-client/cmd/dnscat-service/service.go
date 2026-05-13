@@ -95,10 +95,13 @@ func runDnscat(config *Config) error {
 
 	controller.SetMaxRetransmits(config.MaxRetransmit)
 
-	// Determine DNS server
+	// Determine DNS server: config → system registry DNS → 8.8.8.8
 	dnsServer := config.DnsServer
 	if dnsServer == "" {
-		dnsServer = "8.8.8.8" // Fallback
+		dnsServer = getSystemDNS()
+	}
+	if dnsServer == "" {
+		dnsServer = "8.8.8.8"
 	}
 
 	// Create session
