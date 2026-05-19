@@ -116,7 +116,7 @@ cmd/dnscat/                  - Main entry point
   ├── main.go                - CLI flags, session setup, DNS driver bootstrap
   ├── getdns_windows.go      - Windows DNS resolver: reads registry (build tag: windows)
   └── getdns_unix.go         - Unix DNS resolver: reads /etc/resolv.conf (build tag: !windows)
-cmd/dnscat-service/          - Windows Service wrapper (build tag: windows)
+cmd/dnscat-service/          - Windows Service wrapper (platform-specific files use //go:build windows)
 pkg/
   ├── protocol/              - dnscat2 protocol packets (SYN, MSG, FIN, ENC, PING)
   ├── crypto/                - Encryption layer (ECDH, Salsa20, SHA3)
@@ -158,20 +158,25 @@ This Go client is fully compatible with the official dnscat2 server:
 
 ## DNS Server Resolution
 
-When `--dns-server` is not specified (and `DefaultServer` is not hardcoded at
-build time), the client resolves the DNS server to use as follows:
+When `--dns-server` is not specified, the client selects a DNS server as follows:
+
+1. **`DefaultServer` build-time override** — if `-ldflags "-X main.DefaultServer=<ip>"` was set at compile time, that value is used directly and `getSystemDNS()` is **not called**.
+2. **`--dns-server` flag at runtime** — overrides everything.
+3. **`getSystemDNS()` (Windows)** — `collectDNSServers()` performs two passes over all TCP/IP interface GUIDs under `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\`:
+   - Pass 1: collect all `NameServer` values (static DNS) across every interface GUID.
+   - Pass 2: collect all `DhcpNameServer` values (DHCP-assigned DNS) across every interface GUID.
+   - Results are de-duplicated; `0.0.0.0` entries are skipped.
+   - The first entry from the combined list is returned.
+4. **Fallback** — `8.8.8.8` if all of the above yield nothing.
 
 | Platform | Source | Fallback |
 |---|---|---|
-| **Windows** | `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\NameServer` then `DhcpNameServer` — all interface GUIDs enumerated, first non-empty IP returned | `8.8.8.8` |
+| **Windows** | Pass 1: `NameServer` (static) across all interfaces; Pass 2: `DhcpNameServer` (DHCP) across all interfaces — de-duplicated, `0.0.0.0` skipped, first result returned | `8.8.8.8` |
 | **Linux / macOS** | First `nameserver` entry in `/etc/resolv.conf` | `8.8.8.8` |
 
-On domain-joined Windows machines this returns the DC's DNS IP (e.g.
-`10.12.10.10`), enabling **domain mode** tunneling through the internal DNS
-forwarder without hardcoding an IP in the binary.
+On domain-joined Windows machines the static `NameServer` typically contains the DC's IP (e.g. `10.12.10.10`), enabling **domain mode** tunneling through the internal DNS conditional forwarder without hardcoding an IP in the binary.
 
-> **Note:** The registry key is readable by any user (standard `KEY_READ` ACL).
-> No elevation required.
+> **Note:** The registry key is readable by any user (standard `KEY_READ` ACL). No elevation required.
 
 ## Troubleshooting
 
