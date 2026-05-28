@@ -38,7 +38,8 @@ react2shell-tool/
     ├── utils.py            # to_charcode() helper
     └── commands/
         ├── builtin.py      # info, help, history, timeout, eval, run
-        └── file_ops.py     # upload, stage, decode, decompress, copyfile, rename, download, pipestage, pipeload
+        ├── recon.py        # sysinfo, ipconfig, env, domain, ls, readfile
+        └── file_ops.py     # upload, stage, decode, decompress, copyfile, rename, download, hide, pipestage, pipeload
 ```
 
 **Request/Response flow:**
@@ -174,8 +175,8 @@ throw Object.assign(new Error('NEXT_REDIRECT'), {digest: `NEXT_REDIRECT;push;/lo
 | `rename` | `rename <old> <new>` | `fs.renameSync(old, new)` on target | ❌ No — eval only |
 | `download` | `download <remote_path>` | Binary-safe chunked download: `fs.statSync` → `fs.readSync` 8192 bytes/chunk → saves as `downloaded_<filename>` | ❌ No — eval only |
 | `hide` | `hide <filepath>` | **T1564.001** — `spawnSync('attrib', ['+h', filepath])` — spawns `attrib.exe` | ✅ **Yes** — `attrib.exe` |
-| `pipestage` | `pipestage <local.exe> <target_exe> [ghost_cmdline]` | **T1620** — Stream local PE to target memory → pipe stdin to `<target_exe>`. Zero disk artifact for the piped PE. `ghost_cmdline` forwarded as argv[1] if specified. | ✅ **Yes** — `target_exe` |
-| `pipeload` | `pipeload <payload.b64> <target_exe> [ghost_cmdline]` | **T1620** — Reads b64 file on target, decodes to Buffer, spawns `<target_exe>` with payload bytes via stdin pipe. | ✅ **Yes** — `target_exe` |
+| `pipestage` | `pipestage <local.exe> <CertEnrollAgent.exe>` | **T1620** — Stream local PE to target memory → pipe stdin to loader. Zero disk artifact for the piped PE. | ✅ **Yes** — `CertEnrollAgent.exe` |
+| `pipeload` | `pipeload <payload.b64> <CertEnrollAgent.exe>` | **T1620** — Reads b64 file on target, decodes to Buffer, spawns loader with payload bytes via stdin pipe. | ✅ **Yes** — `CertEnrollAgent.exe` |
 
 **Notes:**
 - All eval-only commands wrap JS code in `eval(String.fromCharCode(...))` to avoid quote issues
@@ -388,8 +389,8 @@ All methods are `@staticmethod`.
 | `rename` | `rename(args: str)` | Parses `<old> <new>`. Runs `fs.renameSync(old, new)` on target |
 | `download` | `download(remote_path: str)` | stat → access check via `new Function(...)()` → loop `fs.readSync` (8192 bytes/chunk) → saves as `downloaded_<filename>` |
 | `hide` | `hide(filepath: str)` | **T1564.001** — Sets Windows hidden attribute via `attrib.exe +h` (spawns `attrib.exe`) |
-| `pipestage` | `pipestage(args: str)` | **T1620** — Parses `<local.exe> <target_exe> [ghost_cmdline]`. Streams PE into `global.__stageBuffer`, decodes in-memory, prepends 4-byte LE size header, `spawnSync(target_exe, [ghost_cmdline], {input: stdinData})`. Zero disk artifact for piped PE. |
-| `pipeload` | `pipeload(args: str)` | **T1620** — Parses `<b64_file> <target_exe> [ghost_cmdline]`. Reads b64 file on target, decodes to Buffer, prepends 4-byte LE size header, `spawnSync(target_exe, [ghost_cmdline], {input: stdinData})`. |
+| `pipestage` | `pipestage(args: str)` | **T1620** — Parses `<local.exe> <CertEnrollAgent.exe>`. Streams PE into `global.__stageBuffer`, decodes in-memory, prepends 4-byte LE size header, `spawnSync(loader, [], {input: stdinData})`. Zero disk artifact for piped PE. |
+| `pipeload` | `pipeload(args: str)` | **T1620** — Parses `<b64_file> <CertEnrollAgent.exe>`. Reads b64 file on target, decodes to Buffer, prepends 4-byte LE size header, `spawnSync(loader, [], {input: stdinData})`. |
 
 ### `BuiltinCommands` (`commands/builtin.py`)
 
@@ -417,18 +418,3 @@ def to_charcode(s):
 | `-T / --timeout` | `15` | Request timeout in seconds |
 
 ---
-
-## IOCs / Detection
-
-- `POST /` with `Next-Action: x` header
-- Multipart body with `"then":"$1:__proto__:then"` or `"$@0"` field reference
-- `X-Action-Redirect: /login?a=<base64>` in response headers
-- `node.exe` → `cmd.exe` or unexpected child process spawns
-- High-entropy `eval(String.fromCharCode(...))` patterns in server-side request logs
-- **T1027.015 Compression**: `node.exe` reads `.gz` file, `zlib.gunzipSync` API call, writes `.exe`/`.dll` to disk
-- File creation pattern: `.b64` → `.gz` → `.exe` (upload → decompress → execute chain)
-- Chunked file writes via `fs.appendFileSync` (2000-char chunks for upload)
-- `attrib.exe` spawned by `node.exe` with `+h` flag (T1564.001 - Hide Artifacts)
-- **T1027.013 XOR Encode** (`stage --encrypt`): `node.exe` writes `.bin` file where first byte = `0xEE` (not `MZ`); on-disk bytes differ from in-memory PE
-- **T1620 `pipestage`**: `node.exe` accumulates PE in `global.__stageBuffer` then calls `spawnSync(target_exe, {input: [4-byte-size][PE-bytes]})` — no PE file written to disk at any point
-- **T1620 `pipeload`**: `node.exe` reads `.b64` from target disk, decodes, `spawnSync` with PE bytes as stdin — `.b64` file is the only disk artifact
