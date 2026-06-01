@@ -236,7 +236,7 @@ func (d *Driver) handleTunnelConnect(pkt *Packet) *Packet {
 	conn, err := net.Dial("tcp", addr)
 	if err != nil {
 		return CreateErrorResponse(pkt.RequestID, TunnelStatusFail,
-			"The dnscat2 client couldn't connect to the remote host!")
+			"Tunnel connection failed.")
 	}
 
 	tunnelID := d.nextTunnelID()

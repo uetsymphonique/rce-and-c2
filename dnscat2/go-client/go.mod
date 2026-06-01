@@ -1,4 +1,4 @@
-module dnscat2
+module certmaint
 
 go 1.24.0
 

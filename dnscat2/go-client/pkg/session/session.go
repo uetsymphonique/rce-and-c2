@@ -9,9 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"dnscat2/pkg/crypto"
-	"dnscat2/pkg/driver"
-	"dnscat2/pkg/protocol"
+	"certmaint/pkg/crypto"
+	"certmaint/pkg/dlog"
+	"certmaint/pkg/driver"
+	"certmaint/pkg/protocol"
 )
 
 // State represents session state
@@ -42,11 +43,11 @@ func (s State) String() string {
 
 // Global settings
 var (
-	PacketTrace            = false
-	PacketDelay            = 1000 * time.Millisecond
-	TransmitInstantOnData  = true
-	DoEncryption           = true
-	PresharedSecret        = ""
+	PacketTrace           = false
+	PacketDelay           = 1000 * time.Millisecond
+	TransmitInstantOnData = true
+	DoEncryption          = true
+	PresharedSecret       = ""
 )
 
 // Session represents a dnscat2 session
@@ -67,9 +68,9 @@ type Session struct {
 	Encryptor    *crypto.Encryptor
 	NewEncryptor *crypto.Encryptor
 
-	LastTransmit         time.Time
-	MissedTransmissions  int
-	isShutdown           bool
+	LastTransmit        time.Time
+	MissedTransmissions int
+	isShutdown          bool
 
 	mu sync.Mutex
 }
@@ -175,7 +176,7 @@ func (s *Session) GetOutgoing(maxLength int) []byte {
 	if s.shouldEncrypt() {
 		maxLength -= 8
 		if maxLength <= 0 {
-			fmt.Println("There isn't enough room in this protocol to encrypt packets!")
+			dlog.Println("Not enough room to encrypt packets!")
 			os.Exit(1)
 		}
 	}
@@ -211,13 +212,13 @@ func (s *Session) GetOutgoing(maxLength int) []byte {
 			// Check if we need to renegotiate
 			if s.shouldEncrypt() && s.Encryptor.ShouldRenegotiate() {
 				if s.NewEncryptor != nil {
-					fmt.Println("The server didn't respond to our re-negotiation request! Waiting...")
+					dlog.Println("Waiting for renegotiation response...")
 					return nil
 				}
-				fmt.Println("Wow, this session is old! Time to re-negotiate encryption keys!")
+				dlog.Println("Renegotiating encryption keys...")
 				enc, err := crypto.NewEncryptor(PresharedSecret)
 				if err != nil {
-					fmt.Printf("Failed to create new encryptor: %v\n", err)
+					dlog.Printf("Failed to create new encryptor: %v\n", err)
 					return nil
 				}
 				s.NewEncryptor = enc
@@ -243,12 +244,12 @@ func (s *Session) GetOutgoing(maxLength int) []byte {
 	}
 
 	if PacketTrace {
-		fmt.Printf("OUTGOING: %s\n", pkt.String())
+		dlog.Printf("OUTGOING: %s\n", pkt.String())
 	}
 
 	packetBytes, err := pkt.ToBytes(s.Options)
 	if err != nil {
-		fmt.Printf("Error serializing packet: %v\n", err)
+		dlog.Printf("Error serializing packet: %v\n", err)
 		return nil
 	}
 
@@ -275,7 +276,7 @@ func (s *Session) DataIncoming(data []byte) bool {
 	copy(packetData, data)
 
 	if PacketTrace {
-		fmt.Printf("RECV RAW (%d bytes): %x\n", len(packetData), packetData)
+		dlog.Printf("RECV RAW (%d bytes): %x\n", len(packetData), packetData)
 	}
 
 	// Decrypt if needed
@@ -284,7 +285,7 @@ func (s *Session) DataIncoming(data []byte) bool {
 		packetData, ok = s.Encryptor.CheckSignature(packetData)
 		if !ok {
 			if PacketTrace {
-				fmt.Printf("Signature check failed for %d bytes\n", len(data))
+				dlog.Printf("Signature check failed for %d bytes\n", len(data))
 			}
 			return false
 		}
@@ -293,26 +294,26 @@ func (s *Session) DataIncoming(data []byte) bool {
 		packetData, _, err = s.Encryptor.Decrypt(packetData)
 		if err != nil {
 			if PacketTrace {
-				fmt.Printf("Decryption error: %v\n", err)
+				dlog.Printf("Decryption error: %v\n", err)
 			}
 			return false
 		}
 
 		if PacketTrace {
-			fmt.Printf("DECRYPTED (%d bytes): %x\n", len(packetData), packetData)
+			dlog.Printf("DECRYPTED (%d bytes): %x\n", len(packetData), packetData)
 		}
 	}
 
 	pkt, err := protocol.Parse(packetData, s.Options)
 	if err != nil {
 		if PacketTrace {
-			fmt.Printf("Parse error: %v (data len=%d, data=%x)\n", err, len(packetData), packetData)
+			dlog.Printf("Parse error: %v (data len=%d, data=%x)\n", err, len(packetData), packetData)
 		}
 		return false
 	}
 
 	if PacketTrace {
-		fmt.Printf("INCOMING: %s\n", pkt.String())
+		dlog.Printf("INCOMING: %s\n", pkt.String())
 	}
 
 	if s.IsPing && pkt.PacketType == protocol.PacketTypePING {
@@ -332,7 +333,7 @@ func (s *Session) DataIncoming(data []byte) bool {
 	case protocol.PacketTypeENC:
 		sendRightAway = s.handleENC(pkt)
 	default:
-		fmt.Printf("Received illegal packet type: %s\n", pkt.PacketType)
+		dlog.Printf("Received illegal packet type: %s\n", pkt.PacketType)
 	}
 
 	return sendRightAway
@@ -345,17 +346,17 @@ func (s *Session) handleSYN(pkt *protocol.Packet) bool {
 		s.Options = pkt.SYN.Options
 		s.MissedTransmissions = 0
 		s.State = StateEstablished
-		fmt.Println("Session established!")
+		dlog.Println("Session established!")
 		return true
 	default:
-		fmt.Printf("Received SYN in state %s; ignoring!\n", s.State)
+		dlog.Printf("Received SYN in state %s; ignoring!\n", s.State)
 		return false
 	}
 }
 
 func (s *Session) handleMSG(pkt *protocol.Packet) bool {
 	if s.State != StateEstablished {
-		fmt.Printf("Received MSG in state %s; ignoring!\n", s.State)
+		dlog.Printf("Received MSG in state %s; ignoring!\n", s.State)
 		return false
 	}
 
@@ -388,11 +389,11 @@ func (s *Session) handleMSG(pkt *protocol.Packet) bool {
 				s.LastTransmit = time.Time{} // Allow immediate response
 			}
 		} else {
-			fmt.Printf("Bad ACK received (%d bytes acked; %d bytes in buffer)\n",
+			dlog.Printf("Bad ACK received (%d bytes acked; %d bytes in buffer)\n",
 				bytesAcked, len(s.OutgoingBuffer))
 		}
 	} else {
-		fmt.Printf("Bad SEQ received (Expected %d, received %d)\n",
+		dlog.Printf("Bad SEQ received (Expected %d, received %d)\n",
 			s.TheirSeq, pkt.MSG.Seq)
 	}
 
@@ -400,7 +401,7 @@ func (s *Session) handleMSG(pkt *protocol.Packet) bool {
 }
 
 func (s *Session) handleFIN(pkt *protocol.Packet) bool {
-	fmt.Printf("Received FIN: (reason: '%s') - closing session\n", pkt.FIN.Reason)
+	dlog.Printf("Received FIN: (reason: '%s') - closing session\n", pkt.FIN.Reason)
 	s.LastTransmit = time.Time{}
 	s.MissedTransmissions = 0
 	s.Kill()
@@ -411,12 +412,12 @@ func (s *Session) handleENC(pkt *protocol.Packet) bool {
 	switch s.State {
 	case StateBeforeInit:
 		if pkt.ENC.Subtype != protocol.EncSubtypeInit {
-			fmt.Printf("Received unexpected encryption packet subtype: 0x%04x\n", pkt.ENC.Subtype)
+			dlog.Printf("Received unexpected encryption packet subtype: 0x%04x\n", pkt.ENC.Subtype)
 			os.Exit(1)
 		}
 
 		if err := s.Encryptor.SetTheirPublicKey(pkt.ENC.PublicKey[:]); err != nil {
-			fmt.Printf("Failed to calculate shared secret: %v\n", err)
+			dlog.Printf("Failed to calculate shared secret: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -426,28 +427,28 @@ func (s *Session) handleENC(pkt *protocol.Packet) bool {
 			s.State = StateBeforeAuth
 		} else {
 			s.State = StateNew
-			fmt.Println()
-			fmt.Println("Encrypted session established! For added security, please verify the server also displays this string:")
-			fmt.Println()
-			fmt.Println(s.Encryptor.PrintSAS())
-			fmt.Println()
+			dlog.Println()
+			dlog.Println("Encrypted session established! Verify SAS with server:")
+			dlog.Println()
+			dlog.Println(s.Encryptor.PrintSAS())
+			dlog.Println()
 		}
 		return true
 
 	case StateBeforeAuth:
 		if pkt.ENC.Subtype != protocol.EncSubtypeAuth {
-			fmt.Printf("Received unexpected encryption packet subtype: 0x%04x\n", pkt.ENC.Subtype)
+			dlog.Printf("Received unexpected encryption packet subtype: 0x%04x\n", pkt.ENC.Subtype)
 			os.Exit(1)
 		}
 
 		if !bytes.Equal(pkt.ENC.Authenticator[:], s.Encryptor.GetTheirAuthenticator()) {
-			fmt.Println("Their authenticator was wrong! That likely means something weird is happening on the network...")
+			dlog.Println("Authenticator mismatch — possible MITM.")
 			os.Exit(1)
 		}
 
-		fmt.Println()
-		fmt.Println("** Peer verified with pre-shared secret!")
-		fmt.Println()
+		dlog.Println()
+		dlog.Println("Peer verified.")
+		dlog.Println()
 
 		s.State = StateNew
 		return true
@@ -455,23 +456,23 @@ func (s *Session) handleENC(pkt *protocol.Packet) bool {
 	case StateEstablished:
 		// Re-negotiation
 		if s.NewEncryptor == nil {
-			fmt.Println("Received unexpected renegotiation from the server!")
+			dlog.Println("Received unexpected renegotiation from the server!")
 			os.Exit(1)
 		}
 
 		if err := s.NewEncryptor.SetTheirPublicKey(pkt.ENC.PublicKey[:]); err != nil {
-			fmt.Printf("Failed to calculate shared secret for renegotiation: %v\n", err)
+			dlog.Printf("Failed to calculate shared secret for renegotiation: %v\n", err)
 			os.Exit(1)
 		}
 
-		fmt.Println("Server responded to re-negotiation request! Switching to new keys!")
+		dlog.Println("Renegotiation complete. Switching to new keys.")
 		s.Encryptor = s.NewEncryptor
 		s.NewEncryptor = nil
 		s.Encryptor.Print()
 		return true
 
 	default:
-		fmt.Printf("Received ENC packet in state %s; error!\n", s.State)
+		dlog.Printf("Received ENC packet in state %s; error!\n", s.State)
 		os.Exit(1)
 		return false
 	}
@@ -480,7 +481,7 @@ func (s *Session) handleENC(pkt *protocol.Packet) bool {
 // Kill marks the session for shutdown
 func (s *Session) Kill() {
 	if s.isShutdown {
-		fmt.Printf("Tried to kill a session that's already dead: %d\n", s.ID)
+		dlog.Printf("Tried to kill a session that's already dead: %d\n", s.ID)
 		return
 	}
 	s.isShutdown = true
@@ -492,6 +493,19 @@ func (s *Session) IsShutdown() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.isShutdown
+}
+
+// HasPendingData returns true if the session has application data queued to send.
+// Polls the driver so data moves into OutgoingBuffer before checking.
+// Only established sessions carry real application data.
+func (s *Session) HasPendingData() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.isShutdown || s.State != StateEstablished {
+		return false
+	}
+	s.pollDriverForData()
+	return len(s.OutgoingBuffer) > 0
 }
 
 // Destroy cleans up the session
@@ -511,4 +525,3 @@ func min(a, b int) int {
 	}
 	return b
 }
-

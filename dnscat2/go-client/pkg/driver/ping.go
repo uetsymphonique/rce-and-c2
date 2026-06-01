@@ -30,7 +30,7 @@ func NewPingDriver() *PingDriver {
 // DataReceived handles ping response
 func (d *PingDriver) DataReceived(data []byte) {
 	if string(data) == string(d.data) {
-		fmt.Println("Ping response received! This seems like a valid dnscat2 server.")
+		fmt.Println("Ping response received!")
 		os.Exit(0)
 	} else {
 		fmt.Println("Ping response received, but it didn't contain the right data!")

