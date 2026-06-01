@@ -8,3 +8,5 @@ __pycache__/
 *.elif
 *.dmp
 *.tmp
+*.gz
+*.cmd
