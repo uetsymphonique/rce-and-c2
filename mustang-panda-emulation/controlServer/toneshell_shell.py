@@ -23,6 +23,7 @@ Anything else is sent as an EXEC (id=5) shell command to the current session.
 
 import argparse
 import json
+import random
 import sys
 import time
 
@@ -74,7 +75,7 @@ class ToneShellShell:
         self.base_url  = f"http://localhost:{port}/api/v1.0"
         self.session   = None   # currently attached session GUID
         self.hostname  = None   # display name for the session
-        self._task_num = 1      # auto-incrementing task counter
+        self._task_num = random.randint(1000, 60000)  # random offset avoids taskNum collision on shell restart
 
     # ── internal helpers ────────────────────────────────────────────────────
 
