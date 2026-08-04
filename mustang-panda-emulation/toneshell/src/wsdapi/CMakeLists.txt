@@ -27,9 +27,9 @@ target_compile_definitions(
     wsdapi
     PRIVATE
     DESIRED_PROCESS_NAME="EssosUpdate.exe"
-    DLL_HANDLER_LOG_FILE="C:\\\\Windows\\\\System32\\\\wsdapih.log"
-    DLL_SH_RUNNER_LOG_FILE="C:\\\\Windows\\\\System32\\\\wsdapisr.log"
-    DLL_REG_LOG_FILE="C:\\\\Windows\\\\System32\\\\wsdapireg.log"
+    DLL_HANDLER_LOG_FILE="${TONESHELL_LOG_DIR}/wsdapih.log"
+    DLL_SH_RUNNER_LOG_FILE="${TONESHELL_LOG_DIR}/wsdapisr.log"
+    DLL_REG_LOG_FILE="${TONESHELL_LOG_DIR}/wsdapireg.log"
     TARGET_MODULE="wsdapi.dll"
     TARGET_MODULE_SYS32="C:\\\\Windows\\\\System32\\\\wsdapi.dll"
     TARGET_MODULE_SYSWOW="C:\\\\Windows\\\\SysWOW64\\\\wsdapi.dll"
@@ -45,7 +45,7 @@ add_custom_command(
     COMMAND
         powershell.exe -File "${CMAKE_SOURCE_DIR}/src/common/sign_artifact.ps1" -Target "$<TARGET_FILE:wsdapi>" -CertSubject "CN=Tully Enterprises, O=Tully Enterprises, L=Riverrun, S=Riverlands, C=Westeros" -CertDnsName "Tully Enterprises" -CertExportPath "$<TARGET_FILE_DIR:wsdapi>/toneshell.pfx"
     COMMAND
-        rar.exe a -hpPentos -ep "$<TARGET_FILE_DIR:wsdapi>/250325_Pentos_Board_Minutes.rar" "${CMAKE_SOURCE_DIR}/src/wsdapi/Essos Competitiveness Brief.lnk" "$<TARGET_FILE:wsdapi>" "${CMAKE_SOURCE_DIR}/EssosUpdate.exe"
+        "C:/Program Files/7-Zip/7z.exe" a -tzip -pPentos "$<TARGET_FILE_DIR:wsdapi>/250325_Pentos_Board_Minutes.zip" "${CMAKE_SOURCE_DIR}/src/wsdapi/Essos Competitiveness Brief.lnk" "$<TARGET_FILE:wsdapi>" "${CMAKE_SOURCE_DIR}/EssosUpdate.exe"
 )
 
 target_include_directories(

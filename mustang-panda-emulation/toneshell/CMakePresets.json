@@ -23,7 +23,10 @@
           "CMAKE_CONFIGURATION_TYPES": "Debug;Release;",
           "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
           "INSTALL_AL": "OFF",
-          "AL_TESTS": "OFF"
+          "AL_TESTS": "OFF",
+          "TONESHELL_LOG_DIR": "C:/Windows/Temp",
+          "TONESHELL_C2_HOST": "192.168.56.2",
+          "TONESHELL_C2_PORT": "8443"
         },
         "condition": {
           "type": "equals",
@@ -60,6 +63,18 @@
             "test4shellcode",
             "gflagsui",
             "test4",
+            "toneshell-test"
+        ]
+      },
+      {
+        "name": "release-toneshell",
+        "description": "Build only TONESHELL targets (skip Protections Test 4 which needs gflags.exe)",
+        "configurePreset": "default",
+        "inheritConfigureEnvironment": true,
+        "configuration": "Release",
+        "targets": [
+            "shellcode",
+            "wsdapi",
             "toneshell-test"
         ]
       }
@@ -108,6 +123,24 @@
           {
             "type": "build",
             "name": "release"
+          },
+          {
+            "type": "test",
+            "name": "release"
+          }
+        ]
+      },
+      {
+        "name": "cicd-release-toneshell",
+        "description": "Build only TONESHELL release targets (skip Protections Test 4)",
+        "steps": [
+          {
+            "type": "configure",
+            "name": "default"
+          },
+          {
+            "type": "build",
+            "name": "release-toneshell"
           },
           {
             "type": "test",

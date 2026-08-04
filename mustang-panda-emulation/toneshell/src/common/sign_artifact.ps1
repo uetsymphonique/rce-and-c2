@@ -43,7 +43,8 @@ if ($cert) {
 
     # Export certificate
     Write-Output "[DEBUG] Exporting certificate";
-    Export-PfxCertificate -Cert $cert -FilePath "$CertExportPath" -ProtectTo "$(whoami)";
+    $pfxPassword = ConvertTo-SecureString -String "Pentos" -Force -AsPlainText;
+    Export-PfxCertificate -Cert $cert -FilePath "$CertExportPath" -Password $pfxPassword;
     if (Test-Path "$CertExportPath") {
         Write-Output "[DEBUG] Exported certificate to $CertExportPath";
     } else {
