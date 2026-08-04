@@ -46,6 +46,7 @@
 #define FAIL_GET_SETHANDLEINFORMATION 0x5002B
 #define FAIL_GET_GETENVIRONMENTVARIABLEW 0x5002C
 #define FAIL_GET_GETVOLUMEINFORMATIONW 0x5002D
+#define FAIL_GET_GETTICKCOUNT64 0x5002F
 
 using LoadLibraryW_t = decltype(&LoadLibraryW);
 using send_t = decltype(&send);
@@ -71,6 +72,7 @@ using CreatePipe_t = decltype(&CreatePipe);
 using SetHandleInformation_t = decltype(&SetHandleInformation);
 using GetEnvironmentVariableW_t = decltype(&GetEnvironmentVariableW);
 using GetVolumeInformationW_t = decltype(&GetVolumeInformationW);
+using GetTickCount64_t = decltype(&GetTickCount64);
 
 // Bundle function pointers into one convenient struct
 struct func_pointers {
@@ -102,6 +104,7 @@ struct func_pointers {
     CreatePipe_t fp_CreatePipe;
     SetHandleInformation_t fp_SetHandleInformation;
     GetEnvironmentVariableW_t fp_GetEnvironmentVariableW;
+    GetTickCount64_t fp_GetTickCount64;
 };
 
 struct sh_context {

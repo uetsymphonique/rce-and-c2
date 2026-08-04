@@ -215,6 +215,11 @@ DWORD FetchFunctions(func_pointers* fp) {
         return FAIL_GET_GETENVIRONMENTVARIABLEW;
     }
 
+    fp->fp_GetTickCount64 = GP(fp->h_kernel32, GetTickCount64, by_fnv1a);
+    if (!(fp->fp_GetTickCount64)) {
+        return FAIL_GET_GETTICKCOUNT64;
+    }
+
     return ERROR_SUCCESS;
 }
 

