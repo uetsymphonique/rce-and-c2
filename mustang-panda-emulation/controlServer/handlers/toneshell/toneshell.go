@@ -330,6 +330,9 @@ func (o *ToneshellHandler) HandleHandshake(resp ImplantPacket) ([]byte, error) {
         o.globalMapMutex.Unlock() // end critical section
     } else {
         o.baseHandler.HandlerLogDebug("Received resumed handshake from implant UUID %s with session ID %s", resp.UUID, sessionId)
+        // A restarted implant on the same host keeps the same hostname-derived sessionId
+        // but generates a fresh random UUID. Without refreshing UUID_SESSION_ID_MAP here,
+        // subsequent BEACONs fail the UUID lookup and the server loops on RECONNECT_REQ.
         o.globalMapMutex.Lock() // critical section
         UUID_SESSION_ID_MAP[resp.UUID] = sessionId
         o.globalMapMutex.Unlock() // end critical section
