@@ -8,7 +8,7 @@ TONESHELL consists of a shellcode loader DLL (`wsdapi.dll`) and backdoor shellco
 
 The TONESHELL DLL will be executed via DLL sideloading/hijacking via `EssosUpdate.exe`, which is a renamed legitimate signed binary `wsddebug_host.exe`. All of the DLL's exports call the same malicious internal function, which executes the shellcode to perform backdoor functionality.<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
 
-The TONESHELL DLL, with embedded shellcode, is packaged in a `.rar` file called `250325_Pentos_Board_Minutes.rar`, which also contains `EssosUpdate.exe` and a malicious LNK file `Essos Competitiveness Brief.lnk`. When run, the LNK file will execute `EssosUpdate.exe` via: `%COMSPEC% /c .\EssosUpdate.exe`. The `.rar` file is password protected with password: `Pentos`
+The TONESHELL DLL, with embedded shellcode, is packaged in a password-protected `.zip` file called `250325_Pentos_Board_Minutes.zip`, which also contains `EssosUpdate.exe` and a malicious LNK file `Essos Competitiveness Brief.lnk`. When run, the LNK file will execute `EssosUpdate.exe` via: `%COMSPEC% /c .\EssosUpdate.exe`. The `.zip` file is password protected with password: `Pentos` (built via `7z a -tzip -pPentos`).
 
 The protections test 4 component is a dropper that drops a similar shellcode loader dll (`gflagsui.dll`) with similar embedded backdoor shellcode. The dropper will open a decoy PDF and execute the DLL via DLL sideloading, but this time by running the `gflags.exe` [legitimate signed binary](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/gflags).<sup>[3](https://hunt.io/blog/toneshell-backdoor-used-to-target-attendees-of-the-iiss-defence-summit)</sup>
 
@@ -178,15 +178,17 @@ python3 aes_base64_log_decryptor.py -i /path/to/log -o /path/to/output --aes-256
 
 ### TONESHELL
 
-The shellcode component logs to `C:\Windows\System32\wsdapi_dat.log`, while the DLL component logs to different log files depending on which part of the DLL component is running:
+Log files are written to the directory configured by the CMake option `TONESHELL_LOG_DIR` (default: `C:\Windows\Temp`, changed from the upstream MITRE default of `C:\Windows\System32` so the chain runs without admin). Replace `<LOG_DIR>` below with whatever the build used.
 
-- `C:\Windows\System32\wsdapih.log`: log file for the main handler routine up until the DLL is registered via `regsvr32`
-- `C:\Windows\System32\wsdapireg.log`: log file for when the DLL is run by `regsvr32` to inject into `waitfor.exe` using `mavinject`.
-- `C:\Windows\System32\wsdapisr.log`: log file for when the DLL is injected into the victim `waitfor.exe` process and runs the shellcode payload.
+The shellcode component logs to `<LOG_DIR>\wsdapi_dat.log`, while the DLL component logs to different log files depending on which part of the DLL component is running:
+
+- `<LOG_DIR>\wsdapih.log`: log file for the main handler routine up until the DLL is registered via `regsvr32`
+- `<LOG_DIR>\wsdapireg.log`: log file for when the DLL is run by `regsvr32` to inject into `waitfor.exe` using `mavinject`.
+- `<LOG_DIR>\wsdapisr.log`: log file for when the DLL is injected into the victim `waitfor.exe` process and runs the shellcode payload.
 
 ### Protections Test 4
 
-The dropper logs to `C:\Windows\System32\t4.log`.
+Test 4 components still log to `C:\Windows\System32` (upstream MITRE defaults, not parameterized). The dropper logs to `C:\Windows\System32\t4.log`.
 
 The shellcode component logs to `C:\Windows\System32\gflagsui_dat.log`, while the DLL component logs to different log files depending on which part of the DLL component is running:
 
@@ -196,7 +198,7 @@ The shellcode component logs to `C:\Windows\System32\gflagsui_dat.log`, while th
 
 ## Build
 
-All components can be built in Debug or Release mode using the included `CMakePreset.json` configurations.
+See [`Build.md`](Build.md) for toolchain, CMake knobs (`TONESHELL_LOG_DIR`, `TONESHELL_C2_HOST`, `TONESHELL_C2_PORT`), workflow presets (including `cicd-release-toneshell` which skips Protections Test 4), and install steps.
 
 The following PowerShell command was used to build the LNK file:
 
@@ -207,39 +209,6 @@ $Shortcut.TargetPath = "%COMSPEC%"
 $Shortcut.Arguments = "/c .\EssosUpdate.exe"
 $Shortcut.IconLocation = "C:\Windows\System32\shell32.dll,70"
 $Shortcut.Save()
-```
-
-### Dependencies
-
-- `CMake` version `3.26`
-- `CMakePresets.json` version `6` support (Visual Studio 17.7)
-
-### Third-Party Libraries
-
-The project leverages the following third party libraries/projects:
-
-- [assemblyline](https://github.com/robleh/assemblyline)
-
-These projects are pulled down and built automatically as part of the build process.
-
-### Quickstart
-
-#### Command Line
-
-Build both Debug and Release configurations of the component.
-
-```PowerShell
-cd Resources\toneshell
-cmake.exe --workflow --preset cicd-debug
-cmake.exe --workflow --preset cicd-release
-```
-
-For simplicity, all of the generated artifacts can be bundled into the
-top-level `install/` directory using the CMake installation facility.
-
-```PowerShell
-cmake.exe --install ./build --config release
-cmake.exe --install ./build --config debug
 ```
 
 ## Developer Notes
