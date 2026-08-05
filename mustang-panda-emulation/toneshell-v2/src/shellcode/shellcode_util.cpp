@@ -220,6 +220,11 @@ DWORD FetchFunctions(func_pointers* fp) {
         return FAIL_GET_GETTICKCOUNT64;
     }
 
+    fp->fp_ExitProcess = GP(fp->h_kernel32, ExitProcess, by_fnv1a);
+    if (!(fp->fp_ExitProcess)) {
+        return FAIL_GET_EXITPROCESS;
+    }
+
     return ERROR_SUCCESS;
 }
 
