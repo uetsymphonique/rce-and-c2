@@ -1,0 +1,49 @@
+# TONESHELL v2 — Flow
+
+**Entry:** `Essos Competitiveness Brief.lnk` → `cmd.exe /c .\EssosUpdate.exe` → `wsdapi.dll` WSDAPI export → `Handler()`  ·  **Artifact summary:** sideloaded DLL → decrypt shellcode → `CreateProcessW(SUSPENDED)` + direct-syscall Early Bird APC injection → shellcode in `waitfor.exe` → TCP beacon to `${TONESHELL_C2_HOST}:${TONESHELL_C2_PORT}` with 2-tier adaptive jitter
+
+| # | Behavior (`actor action artifact`) | Artifact [class] → consumed by | Tactic / TID — Technique Name | Context (baseline) |
+|---|---|---|---|---|
+| 1 | user opens `Essos Competitiveness Brief.lnk` from `250325_Pentos_Board_Minutes.zip` | LNK invocation [file] → #2 | Initial Access / T1566.001 — Phishing: Spearphishing Attachment | LNK icon set to `shell32.dll,70`; zip password `Pentos` |
+| 1a | user opens `Essos Competitiveness Brief.lnk` from `250325_Pentos_Board_Minutes.zip` | LNK invocation [file] → #2 | Execution / T1204.002 — User Execution: Malicious File | LNK icon set to `shell32.dll,70`; zip password `Pentos` |
+| 2 | LNK spawns `cmd.exe /c .\EssosUpdate.exe` | process [process] → #3 | Execution / T1059.003 — Command and Scripting Interpreter: Windows Command Shell | `explorer.exe` → `cmd.exe` from LNK |
+| 3 | `cmd.exe` spawns `EssosUpdate.exe` (renamed `wsddebug_host.exe`) | process [process] → #4 | Stealth / T1218 — System Binary Proxy Execution | signed Microsoft debug tool executing from non-SDK path |
+| 4 | `EssosUpdate.exe` loads adjacent `wsdapi.dll` via search-order sideload | loaded module [process] → #5 | Execution / T1574.001 — Hijack Execution Flow: DLL Side-Loading | legit `wsdapi.dll` normally resolves from `System32` |
+| 4a | `EssosUpdate.exe` loads adjacent `wsdapi.dll` via search-order sideload | loaded module [process] → #5 | Stealth / T1574.001 — Hijack Execution Flow: DLL Side-Loading | legit `wsdapi.dll` normally resolves from `System32` |
+| 4b | `wsdapi.dll` carries attacker-controlled Authenticode signature (`CN=Tully Enterprises, …, C=Westeros`, self-signed via `sign_artifact.ps1`, password `Pentos`) | signed DLL w/ untrusted chain [file] | Defense Impairment / T1553.002 — Subvert Trust Controls: Code Signing | cert chain never validates against Microsoft/enterprise trust store; SHA-256, `NotBefore=-6mo`, `NotAfter=+18mo` |
+| 5 | `wsdapi.dll` resolves Windows APIs by FNV1A hash of export names | — [no-artifact] → #6,#7,#8,#10,#11,#12 | Stealth / T1027.007 — Obfuscated Files or Information: Dynamic API Resolution | LoadLibrary/GetProcAddress absent from IAT |
+| 6 | `wsdapi.dll` calls `GetModuleFileNameW(NULL, buf, MAX_PATH)` — compares leaf name to `EssosUpdate.exe` | — [no-artifact] → #7 | Stealth / T1497.001 — Virtualization/Sandbox Evasion: System Checks | sandbox evasion gate; pure string compare |
+| 7 | `wsdapi.dll` polls `GetForegroundWindow()` in `Sleep(1000)` loop for ≥2 changes over 60 s | — [no-artifact] → #7b | Stealth / T1497.002 — Virtualization/Sandbox Evasion: User Activity Based Checks | blocks headless sandboxes with no user activity |
+| 7b | `Handler()` executes `throw CustomException("Failed check.")` — caught by adjacent `catch(const CustomException&)` whose body calls `InjectAndSpawn()` | — [no-artifact] → #9 | Stealth / T1622 — Debugger Evasion | malicious routine never appears on straight-line CFG; exception unwinding breaks step-through |
+| 8 | `wsdapi.dll` `CreateFileW`+`WriteFile` AES-CTR-encrypted base64-wrapped log to `${TONESHELL_LOG_DIR}\wsdapih.log` (BCrypt) | log file [file] | Stealth / T1027.013 — Obfuscated Files or Information: Encrypted/Encoded File | key `c47001f8…5c18`; DLL handler log only |
+| 9 | `wsdapi.dll` Halos Gate: walks PEB to find `ntdll.dll` base → parses export table → resolves 5 syscall SSNs → patches `.asm` stubs | — [no-artifact] → #12 | Stealth / T1027.007 — Obfuscated Files or Information: Dynamic API Resolution | hook detection via `0xE9`/`0xEB` check; neighbor-fallback for hooked stubs |
+| 9a | `wsdapi.dll` Halos Gate: walks PEB to find `ntdll.dll` base → parses export table → resolves 5 syscall SSNs → patches `.asm` stubs | — [no-artifact] → #12 | Execution / T1106 — Native API | SSN resolution enables direct syscall invocation in #12 |
+| 10 | `wsdapi.dll` decrypts embedded shellcode: `memcpy` key → `XorInPlace(0x3F)` unwrap → `TripleXorInPlace` decrypt to local `VirtualAlloc(RW)` buffer | private RW commit [memory] → #12 | Stealth / T1140 — Deobfuscate/Decode Files or Information | local allocation in `EssosUpdate.exe` address space |
+| 11 | `wsdapi.dll` spawns `waitfor.exe /T 99999 Evt8a3f1d7c2e` suspended via `CreateProcessW(CREATE_SUSPENDED \| CREATE_NO_WINDOW)` | process [process] → #12 | Execution / T1106 — Native API | `EssosUpdate.exe` → `waitfor.exe` parent chain; `/T 99999` keeps process alive |
+| 12 | `wsdapi.dll` injects shellcode into `waitfor.exe`: remote `VirtualAlloc(RW)` + `WriteProcessMemory` shellcode + `VirtualProtect(RX)` + `QueueUserAPC` + `ResumeThread` — all 5 steps via direct-syscall (`SysNt*` stubs, bypass ntdll hooks) | unbacked executable thread in `waitfor.exe` [process] → #13 | Stealth / T1055.004 — Process Injection: Asynchronous Procedure Call | raw shellcode, no DLL mapping; APC fires before `WaitForSingleObject` main logic |
+| 12a | `wsdapi.dll` injects shellcode into `waitfor.exe`: remote `VirtualAlloc(RW)` + `WriteProcessMemory` shellcode + `VirtualProtect(RX)` + `QueueUserAPC` + `ResumeThread` — all 5 steps via direct-syscall (`SysNt*` stubs, bypass ntdll hooks) | unbacked executable thread in `waitfor.exe` [process] → #13 | Execution / T1106 — Native API | raw shellcode, no DLL mapping; APC fires before `WaitForSingleObject` main logic |
+| 13 | shellcode walks PEB → resolves all target APIs (kernel32, ws2_32, ole32, user32) by FNV1A hash of export names | — [no-artifact] → #14,#15,#16,#17,#18,#19,#20 | Stealth / T1027.007 — Obfuscated Files or Information: Dynamic API Resolution | fully position-independent; no IAT |
+| 14 | shellcode calls `GetComputerNameA` | hostname string [no-artifact] → #18 | Discovery / T1082 — System Information Discovery | discovery API from non-image code region |
+| 15 | shellcode calls `CoCreateGuid` → 16-byte victim id | victim GUID buffer [no-artifact] → #16,#18 | — | first victim-id generation after injection; implant-internal identity, no ATT&CK technique |
+| 16 | shellcode `CreateFileW(…, CREATE_ALWAYS)` + `WriteFile` 16-byte victim GUID to `%USERPROFILE%\AppData\Roaming\Microsoft\Web.CompressShaders.config` | config file [file] | Stealth / T1036.005 — Masquerading: Match Legitimate Resource Name or Location | masquerades as Microsoft config path under user profile |
+| 17 | shellcode `WSAStartup(MAKEWORD(2,2))` + `socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)` + `connect` to `${TONESHELL_C2_HOST}:${TONESHELL_C2_PORT}` | outbound TCP connection [netconn] → #18 | Command and Control / T1571 — Non-Standard Port | non-standard port (default `8443`), no TLS |
+| 18 | shellcode `send(sock, …)` handshake: magic `0x18 0x04 0x04` + XOR-encrypted body + hostname + victim ID; `shutdown(SD_SEND)` | C2 packet [netconn] → #19 | Command and Control / T1132.002 — Data Encoding: Non-Standard Encoding | fixed magic bytes; XOR body; no TLS |
+| 19 | shellcode loops `send`/`recv` beacon (`msg_type 0x02`) requesting tasking — 2-tier adaptive jitter: immediate (0 ms) after real task, random 5–30 s on idle | periodic C2 packet [netconn] → #20 | Command and Control / T1095 — Non-Application Layer Protocol | no fixed heartbeat; burst pattern on task; `xorshift64` PRNG seeded from `__rdtsc ^ GetTickCount64` |
+| 20a | shellcode dispatches server task: `CreateProcessW` (exec) | new process [process] | Execution / T1106 — Native API | `waitfor.exe` as task parent; one-shot `connect→send→recv→close` per beacon |
+| 20b | shellcode dispatches server task: `CreateFileW`+`WriteFile` (download) | file [file] | Command and Control / T1105 — Ingress Tool Transfer | `waitfor.exe` as task parent; one-shot `connect→send→recv→close` per beacon |
+| 20c | shellcode dispatches server task: `ReadFile`+`send` (upload) | uploaded bytes [netconn] | Exfiltration / T1041 — Exfiltration Over C2 Channel | `waitfor.exe` as task parent; one-shot `connect→send→recv→close` per beacon |
+
+## Notes — multi-tactic splits
+
+- **#1 → #1 / #1a**: spearphishing attachment delivery (Initial Access) + user double-click of `.lnk` to execute (Execution).
+- **#4 → #4 / #4a**: DLL side-loading is cross-listed in Execution and Stealth.
+- **#9 → #9 / #9a**: SSN resolution via export-table hash walk (Stealth) and direct syscall invocation (Execution).
+- **#12 → #12 / #12a**: APC injection into suspended process (Stealth) and the injection acts — WriteProcessMemory, ResumeThread — itself (Execution).
+- **#15**: `CoCreateGuid` generates an internal implant identifier; no ATT&CK technique covers random-GUID-based implant identity generation.
+- **#20 → #20a / #20b / #20c**: single dispatch routine fans into exec (Execution), download (C2), and upload (Exfiltration).
+
+## Handoff
+
+Flow.md mapping column is complete for TONESHELL v2. Downstream:
+- `write-detection-criteria` + `assign-category` — run against Phase Reference Table rows, not directly against this file.
+- Re-run `document-flow` → `map-technique` if source changes (new task type, changed evasion, protocol drift).

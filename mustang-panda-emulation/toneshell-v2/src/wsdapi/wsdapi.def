@@ -1,0 +1,12 @@
+
+LIBRARY     wsdapi
+EXPORTS
+    WSDSetConfigurationOption
+    WSDXMLCreateContext
+    WSDFreeLinkedMemory
+    WSDCreateDiscoveryPublisher
+    WSDAttachLinkedMemory
+    WSDAllocateLinkedMemory
+    WSDCreateDeviceHost
+    WSDCreateDeviceHostAdvanced
+    WSDCreateHttpAddress

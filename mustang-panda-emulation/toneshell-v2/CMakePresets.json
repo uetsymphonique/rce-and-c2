@@ -1,0 +1,156 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+      "major": 3,
+      "minor": 26,
+      "patch": 0
+    },
+    "configurePresets": [
+      {
+        "name": "default",
+        "binaryDir": "${sourceDir}/build",
+        "installDir": "${sourceDir}/install",
+        "generator": "Ninja Multi-Config",
+        "architecture": {
+          "value": "x64",
+          "strategy": "external"
+        },
+        "cacheVariables": {
+          "FETCHCONTENT_BASE_DIR": "${sourceDir}/external",
+          "CMAKE_MODULE_PATH": "${sourceDir}/cmake",
+          "CMAKE_CXX_STANDARD": "26",
+          "CMAKE_C_STANDARD": "23",
+          "CMAKE_CONFIGURATION_TYPES": "Debug;Release;",
+          "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreaded$<$<CONFIG:Debug>:Debug>",
+          "INSTALL_AL": "OFF",
+          "AL_TESTS": "OFF",
+          "TONESHELL_LOG_DIR": "C:/Windows/Temp",
+          "TONESHELL_C2_HOST": "192.168.56.2",
+          "TONESHELL_C2_PORT": "8443",
+          "TONESHELL_JITTER_ACTIVE_MIN_MS": "1000",
+          "TONESHELL_JITTER_ACTIVE_MAX_MS": "3000",
+          "TONESHELL_JITTER_IDLE_MIN_MS": "5000",
+          "TONESHELL_JITTER_IDLE_MAX_MS": "30000"
+        },
+        "condition": {
+          "type": "equals",
+          "lhs": "${hostSystemName}",
+          "rhs": "Windows"
+        }
+      }
+    ],
+    "buildPresets": [
+      {
+        "name": "release",
+        "description": "Build TONESHELL and Test 4 targets with release configuration",
+        "configurePreset": "default",
+        "inheritConfigureEnvironment": true,
+        "configuration": "Release",
+        "targets": [
+            "shellcode",
+            "wsdapi",
+            "test4shellcode",
+            "gflagsui",
+            "test4",
+            "toneshell-test"
+        ]
+      },
+      {
+        "name": "debug",
+        "description": "Build TONESHELL and Test 4 targets with debug configuration",
+        "configurePreset": "default",
+        "inheritConfigureEnvironment": true,
+        "configuration": "Debug",
+        "targets": [
+            "shellcode",
+            "wsdapi",
+            "test4shellcode",
+            "gflagsui",
+            "test4",
+            "toneshell-test"
+        ]
+      },
+      {
+        "name": "release-toneshell",
+        "description": "Build only TONESHELL targets (skip Protections Test 4 which needs gflags.exe)",
+        "configurePreset": "default",
+        "inheritConfigureEnvironment": true,
+        "configuration": "Release",
+        "targets": [
+            "shellcode",
+            "wsdapi",
+            "toneshell-test"
+        ]
+      }
+    ],
+    "testPresets": [
+      {
+        "name": "debug",
+        "configurePreset": "default",
+        "configuration": "Debug",
+        "inheritConfigureEnvironment": true
+      },
+      {
+        "name": "release",
+        "configurePreset": "default",
+        "configuration": "Release",
+        "inheritConfigureEnvironment": true
+      }
+    ],
+    "workflowPresets": [
+      {
+        "name": "cicd-debug",
+        "description": "Build all TONESHELL and test 4 debug targets",
+        "steps": [
+          {
+            "type": "configure",
+            "name": "default"
+          },
+          {
+            "type": "build",
+            "name": "debug"
+          },
+          {
+            "type": "test",
+            "name": "debug"
+          }
+        ]
+      },
+      {
+        "name": "cicd-release",
+        "description": "Build all TONESHELL and test 4 release targets",
+        "steps": [
+          {
+            "type": "configure",
+            "name": "default"
+          },
+          {
+            "type": "build",
+            "name": "release"
+          },
+          {
+            "type": "test",
+            "name": "release"
+          }
+        ]
+      },
+      {
+        "name": "cicd-release-toneshell",
+        "description": "Build only TONESHELL release targets (skip Protections Test 4)",
+        "steps": [
+          {
+            "type": "configure",
+            "name": "default"
+          },
+          {
+            "type": "build",
+            "name": "release-toneshell"
+          },
+          {
+            "type": "test",
+            "name": "release"
+          }
+        ]
+      }
+    ]
+  }
