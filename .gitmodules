@@ -1,0 +1,3 @@
+[submodule "herpaderping"]
+	path = herpaderping
+	url = https://github.com/jxy-s/herpaderping
