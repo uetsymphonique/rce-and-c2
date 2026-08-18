@@ -30,7 +30,10 @@
           "TONESHELL_JITTER_ACTIVE_MIN_MS": "1000",
           "TONESHELL_JITTER_ACTIVE_MAX_MS": "3000",
           "TONESHELL_JITTER_IDLE_MIN_MS": "5000",
-          "TONESHELL_JITTER_IDLE_MAX_MS": "30000"
+          "TONESHELL_JITTER_IDLE_MAX_MS": "30000",
+          "TONESHELL_MAGIC_0": "0xC7",
+          "TONESHELL_MAGIC_1": "0x3A",
+          "TONESHELL_MAGIC_2": "0x1F"
         },
         "condition": {
           "type": "equals",
