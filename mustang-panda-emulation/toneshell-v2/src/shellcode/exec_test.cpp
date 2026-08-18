@@ -47,7 +47,7 @@ protected:
 
         // Set up test file download data
         std::vector<unsigned char> header = {
-            0x18,0x04,0x04, // magic
+            TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
             0x62,0x03, // payload size (string length + 1 byte for msg type)
             0x06 // RESP_TYPE_FILE_CHUNK type
         };
@@ -77,7 +77,7 @@ TEST_F(ExecTest, TestPerformExecTask) {
     // Verify output and task complete notification
     EXPECT_EQ(test_utils::mock_sent_data_vectors.size(), 2);
     unsigned char output_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x27,0x00, // payload size
 
         // XOR key
@@ -106,7 +106,7 @@ TEST_F(ExecTest, TestPerformExecTask) {
     EXPECT_EQ(0, memcmp(test_utils::mock_sent_data_vectors[0].data(), output_want, sizeof(output_want)));
 
     unsigned char notif_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x1d,0x00, // payload size
 
         // XOR key
@@ -150,7 +150,7 @@ TEST_F(ExecTest, TestPerformFileDownloadTask) {
 
     EXPECT_EQ(test_utils::mock_sent_data_vectors.size(), 2);
     unsigned char chunk_req_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x1d,0x00, // payload size
 
         // XOR key
@@ -177,7 +177,7 @@ TEST_F(ExecTest, TestPerformFileDownloadTask) {
     EXPECT_EQ(0, memcmp(test_utils::mock_sent_data_vectors[0].data(), chunk_req_want, sizeof(chunk_req_want)));
 
     unsigned char notif_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x1d,0x00, // payload size
 
         // XOR key
@@ -228,7 +228,7 @@ TEST_F(ExecTest, TestPerformFileUploadTask) {
 
     EXPECT_EQ(test_utils::mock_sent_data_vectors.size(), 2);
     unsigned char chunk_upload_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x7a,0x03, // payload size
 
         // XOR key
@@ -255,7 +255,7 @@ TEST_F(ExecTest, TestPerformFileUploadTask) {
     EXPECT_EQ(0, memcmp(test_utils::mock_sent_data_vectors[0].data(), chunk_upload_want, sizeof(chunk_upload_want)));
 
     unsigned char notif_want[] = {
-        0x18,0x04,0x04, // magic
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2, // magic
         0x1d,0x00, // payload size
 
         // XOR key

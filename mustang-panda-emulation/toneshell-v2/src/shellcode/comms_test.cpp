@@ -23,7 +23,7 @@ protected:
     client_message* p_dummy_msg;
     client_message* p_test_msg;
     server_response* p_dummy_rsp;
-    unsigned char magic[3] = {0x18, 0x04, 0x04};
+    unsigned char magic[3] = {TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2};
     unsigned char dummy_id[16] = {
         0x70,0x77,0xa4,0x89,0xac,0x4e,0xcc,0x0f,
         0x30,0x4e,0x80,0xe9,0x66,0x97,0xed,0x9f
@@ -35,7 +35,7 @@ protected:
     };
 
     unsigned char test_task_resp_bytes[33] = {
-        0x18,0x04,0x04,0x1c,0x00,0x05,0x01,0x00,
+        TONESHELL_MAGIC_0,TONESHELL_MAGIC_1,TONESHELL_MAGIC_2,0x1c,0x00,0x05,0x01,0x00,
         0x00,0x00,0x3c,0x00,0x00,0x00,0x0f,0x00,
         0x00,0x00,0x77,0x68,0x6f,0x61,0x6d,0x69,
         0x2e,0x65,0x78,0x65,0x20,0x2f,0x61,0x6c,
@@ -93,7 +93,7 @@ TEST_F(CommsTest, TestSetClientMsg) {
     ASSERT_EQ(GetClientMsgSize(p_test_msg), 298);
 
     unsigned char want[298] = {
-        0x18, 0x04, 0x04, // magic
+        TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2, // magic
         0x25, 0x00, // payload_size
 
         // xor_key
@@ -128,7 +128,7 @@ TEST_F(CommsTest, TestSetClientMsg) {
     ASSERT_EQ(GetClientMsgSize(p_test_msg), 289);
 
     unsigned char want2[289] = {
-        0x18, 0x04, 0x04, // magic
+        TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2, // magic
         0x1C, 0x00, // payload_size
 
         // xor_key

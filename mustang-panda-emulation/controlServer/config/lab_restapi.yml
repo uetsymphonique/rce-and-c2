@@ -1,0 +1,3 @@
+address: "0.0.0.0:9999"
+dbPath: "./evalsC2server.db"
+enable_caldera_forwarding: false

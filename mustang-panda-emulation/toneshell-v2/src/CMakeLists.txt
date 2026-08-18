@@ -61,4 +61,7 @@ target_compile_definitions(
     DLL_SH_RUNNER_LOG_FILE="toneshell_sh_runner.log"
     DLL_RP_LOG_FILE="toneshell_runpayload.log"
     ENCRYPTED_LOGGING=1 # set to 0 to disable, set to non-0 to enable
+    TONESHELL_MAGIC_0=${TONESHELL_MAGIC_0}
+    TONESHELL_MAGIC_1=${TONESHELL_MAGIC_1}
+    TONESHELL_MAGIC_2=${TONESHELL_MAGIC_2}
 )

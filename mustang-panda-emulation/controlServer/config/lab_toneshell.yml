@@ -1,0 +1,21 @@
+toneshell:
+  host: 0.0.0.0
+  port: 8443
+  enabled: true
+  encryption_type: XOR
+  magic_bytes: "c73a1f"
+
+plugx:
+  host: 0.0.0.0
+  port: 9443
+  enabled: false
+
+vscode_tunnel:
+  host: 0.0.0.0
+  port: 8888
+  enabled: false
+
+simplefileserver:
+  host: 0.0.0.0
+  port: 80
+  enabled: false
