@@ -18,4 +18,7 @@ vscode_tunnel:
 simplefileserver:
   host: 0.0.0.0
   port: 80
-  enabled: false
+  mappings:
+    - prefix: /files
+      dir: ../toneshell-v2
+  enabled: true
