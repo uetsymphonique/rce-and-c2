@@ -4,6 +4,9 @@ PUBLIC SysNtWriteVirtualMemory
 PUBLIC SysNtProtectVirtualMemory
 PUBLIC SysNtQueueApcThread
 PUBLIC SysNtResumeThread
+PUBLIC SysNtCreateSection
+PUBLIC SysNtMapViewOfSection
+PUBLIC SysNtUnmapViewOfSection
 
 .code
 
@@ -48,5 +51,26 @@ SysNtResumeThread PROC
     syscall
     ret
 SysNtResumeThread ENDP
+
+SysNtCreateSection PROC
+    mov r10, rcx
+    mov eax, 0DEADBEEFh
+    syscall
+    ret
+SysNtCreateSection ENDP
+
+SysNtMapViewOfSection PROC
+    mov r10, rcx
+    mov eax, 0DEADBEEFh
+    syscall
+    ret
+SysNtMapViewOfSection ENDP
+
+SysNtUnmapViewOfSection PROC
+    mov r10, rcx
+    mov eax, 0DEADBEEFh
+    syscall
+    ret
+SysNtUnmapViewOfSection ENDP
 
 END

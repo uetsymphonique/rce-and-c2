@@ -1,6 +1,6 @@
 # TONESHELL — Build
 
-**Toolchain:** CMake ≥ 3.26 + Ninja Multi-Config generator + MSVC (Visual Studio Build Tools). See `CMakePresets.json` for the pinned configure preset.
+**Toolchain:** CMake ≥ 3.26 + Ninja Multi-Config generator + MSVC + MASM (Visual Studio Build Tools). MASM is required for `syscalls.asm` (direct-syscall stubs). See `CMakePresets.json` for the pinned configure preset.
 
 ## Prerequisites
 
@@ -25,13 +25,28 @@ Set in `CMakePresets.json` (`configurePresets[0].cacheVariables`) or overridden 
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TONESHELL_LOG_DIR` | `C:/Windows/Temp` | Directory the shellcode + DLL runtime logs (`wsdapih.log`, `wsdapisr.log`, `wsdapireg.log`, `wsdapi_dat.log`) get written to. Default is user-writable so the LNK chain runs without admin. |
+| `TONESHELL_LOG_DIR` | `C:/Windows/Temp` | Directory the shellcode + DLL runtime logs (`wsdapih.log`, `wsdapisr.log`, `wsdapi_dat.log`) get written to. Default is user-writable so the LNK chain runs without admin. |
 | `TONESHELL_C2_HOST` | `192.168.56.2` | C2 server host/IP baked into the shellcode. |
 | `TONESHELL_C2_PORT` | `8443` | C2 server TCP port baked into the shellcode. |
+| `TONESHELL_JITTER_ACTIVE_MIN_MS` | `1000` | Min jitter (ms) after a real task completes — burst mode. |
+| `TONESHELL_JITTER_ACTIVE_MAX_MS` | `3000` | Max jitter (ms) after a real task completes. |
+| `TONESHELL_JITTER_IDLE_MIN_MS` | `5000` | Min jitter (ms) on idle beacon (no tasking). |
+| `TONESHELL_JITTER_IDLE_MAX_MS` | `30000` | Max jitter (ms) on idle beacon. |
+| `TONESHELL_MAGIC_0` | `0xC7` | C2 protocol magic byte 0 (header signature). |
+| `TONESHELL_MAGIC_1` | `0x3A` | C2 protocol magic byte 1. |
+| `TONESHELL_MAGIC_2` | `0x1F` | C2 protocol magic byte 2. |
 
-Sources that consume them:
-- `src/wsdapi/CMakeLists.txt` — `TONESHELL_LOG_DIR` for `DLL_HANDLER_LOG_FILE` / `DLL_SH_RUNNER_LOG_FILE` / `DLL_REG_LOG_FILE`.
-- `src/shellcode/CMakeLists.txt` — all three for the `shellcode-pe` target's `SERVER` / `PORT` / `SH_LOG_FILE`. The `test4shellcode-pe` target intentionally keeps upstream hardcoded values.
+### Compile definitions (not cache variables)
+
+| Define | Set in | Purpose |
+|---|---|---|
+| `TONESHELL_DIRECT_SYSCALL` | `src/wsdapi/CMakeLists.txt` | Enables direct-syscall injection path (Halos Gate + shared section + Early Bird APC). When not defined, falls back to legacy regsvr32 + mavinject path. Always defined for the `wsdapi` target. |
+
+### Sources that consume them
+
+- `src/wsdapi/CMakeLists.txt` — `TONESHELL_LOG_DIR` for `DLL_HANDLER_LOG_FILE` / `DLL_SH_RUNNER_LOG_FILE`.
+- `src/shellcode/CMakeLists.txt` — `TONESHELL_LOG_DIR`, `TONESHELL_C2_HOST`, `TONESHELL_C2_PORT` for `SERVER` / `PORT` / `SH_LOG_FILE`; jitter and magic variables for the `shellcode-pe` target. The `test4shellcode-pe` target intentionally keeps upstream hardcoded values.
+- `src/CMakeLists.txt` — `TONESHELL_MAGIC_0/1/2` for the DLL handler (shared between wsdapi and gflagsui).
 
 ## Workflow presets
 

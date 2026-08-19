@@ -35,6 +35,11 @@ typedef RTL_USER_PROCESS_PARAMETERS* PRTL_USER_PROCESS_PARAMETERS;
 #define FAIL_HALOS_GATE_BASE 0x56030
 #define FAIL_HALOS_GATE_EXPORT 0x56031
 
+typedef enum _SECTION_INHERIT {
+    ViewShare = 1,
+    ViewUnmap = 2
+} SECTION_INHERIT;
+
 extern "C" {
 NTSTATUS SysNtCreateUserProcess(
     PHANDLE ProcessHandle,
@@ -86,6 +91,34 @@ NTSTATUS SysNtQueueApcThread(
 NTSTATUS SysNtResumeThread(
     HANDLE ThreadHandle,
     PULONG SuspendCount
+);
+
+NTSTATUS SysNtCreateSection(
+    PHANDLE            SectionHandle,
+    ACCESS_MASK        DesiredAccess,
+    POBJECT_ATTRIBUTES ObjectAttributes,
+    PLARGE_INTEGER     MaximumSize,
+    ULONG              SectionPageProtection,
+    ULONG              AllocationAttributes,
+    HANDLE             FileHandle
+);
+
+NTSTATUS SysNtMapViewOfSection(
+    HANDLE          SectionHandle,
+    HANDLE          ProcessHandle,
+    PVOID*          BaseAddress,
+    ULONG_PTR       ZeroBits,
+    SIZE_T          CommitSize,
+    PLARGE_INTEGER  SectionOffset,
+    PSIZE_T         ViewSize,
+    SECTION_INHERIT InheritDisposition,
+    ULONG           AllocationType,
+    ULONG           Win32Protect
+);
+
+NTSTATUS SysNtUnmapViewOfSection(
+    HANDLE ProcessHandle,
+    PVOID  BaseAddress
 );
 }
 

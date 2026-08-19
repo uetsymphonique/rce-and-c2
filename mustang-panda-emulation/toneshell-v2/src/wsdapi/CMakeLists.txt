@@ -38,7 +38,7 @@ target_compile_definitions(
     ENCRYPTED_LOGGING=1 # set to 0 to disable, set to non-0 to enable
 )
 
-# Sign DLL and build .rar
+# Sign DLL and build .zip
 add_custom_command(
     TARGET wsdapi
     POST_BUILD

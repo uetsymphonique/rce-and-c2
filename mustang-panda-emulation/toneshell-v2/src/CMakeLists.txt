@@ -56,7 +56,7 @@ target_compile_definitions(
     PRIVATE
     SERVER="10.100.0.70"
     PORT=8443
-    SH_LOG_FILE="C:\\\\users\\\\public\\\\toneshell_shellcode.log"
+    SH_LOG_FILE="${TONESHELL_LOG_DIR}/toneshell_shellcode.log"
     DLL_HANDLER_LOG_FILE="toneshell_main.log"
     DLL_SH_RUNNER_LOG_FILE="toneshell_sh_runner.log"
     DLL_RP_LOG_FILE="toneshell_runpayload.log"

