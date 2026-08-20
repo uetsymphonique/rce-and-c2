@@ -187,8 +187,8 @@ class XpMssql:
              else self._build_plain_ps(out_path)
         self.cmd_xpshell_psh(shell, ps)
 
-        # Cleanup
-        shell.cmd_exec_raw(f'del /f {remote_sql}')
+        # Cleanup — del is a cmd builtin, must go through cmd /c
+        shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
         drop_tsql = (f"EXECUTE AS LOGIN='sa';"
                      f"EXEC xp_cmdshell 'sqlcmd -S {self._host} -U {self._login} "
                      f"-P {self._password} -C -Q \"DROP TABLE tempdb..stg\"'")
