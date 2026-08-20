@@ -115,17 +115,19 @@ class XpMssql:
         for i, start in enumerate(range(0, len(content), SCRIPT_CHUNK_SIZE)):
             chunk = content[start:start + SCRIPT_CHUNK_SIZE]
             mode  = SP_OA_CREATE if i == 0 else SP_OA_APPEND
-            # Build T-SQL value expr: split on " and rejoin with CHAR(34) so no " appears
-            # inside any string literal → _exec_q's " doubling never fires on content chars
-            # → C runtime can't misparse the -Q "..." boundary.
+            # sp_OAMethod only accepts literals or variables, not expressions.
+            # Use @v to hold the content: SET @v evaluates the expression first,
+            # then sp_OAMethod receives the variable. CHAR(34) substitution keeps "
+            # out of T-SQL string literals so _exec_q's " doubling never fires on content.
             segs     = chunk.split('"')
             val_expr = '+CHAR(34)+'.join(f"'{self._tsql_escape(s)}'" for s in segs)
             tsql  = (
                 "EXECUTE AS LOGIN='sa';"
-                "DECLARE @f INT,@x INT;"
+                "DECLARE @f INT,@x INT,@v NVARCHAR(MAX);"
                 "EXEC sp_OACreate 'Scripting.FileSystemObject',@f OUT;"
                 f"EXEC sp_OAMethod @f,'OpenTextFile',@x OUT,'{self._tsql_escape(path)}',{mode},1;"
-                f"EXEC sp_OAMethod @x,'Write',NULL,{val_expr};"
+                f"SET @v={val_expr};"
+                "EXEC sp_OAMethod @x,'Write',NULL,@v;"
                 "EXEC sp_OAMethod @x,'Close';"
                 "EXEC sp_OADestroy @f;"
             )
