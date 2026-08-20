@@ -115,12 +115,17 @@ class XpMssql:
         for i, start in enumerate(range(0, len(content), SCRIPT_CHUNK_SIZE)):
             chunk = content[start:start + SCRIPT_CHUNK_SIZE]
             mode  = SP_OA_CREATE if i == 0 else SP_OA_APPEND
+            # Build T-SQL value expr: split on " and rejoin with CHAR(34) so no " appears
+            # inside any string literal → _exec_q's " doubling never fires on content chars
+            # → C runtime can't misparse the -Q "..." boundary.
+            segs     = chunk.split('"')
+            val_expr = '+CHAR(34)+'.join(f"'{self._tsql_escape(s)}'" for s in segs)
             tsql  = (
                 "EXECUTE AS LOGIN='sa';"
                 "DECLARE @f INT,@x INT;"
                 "EXEC sp_OACreate 'Scripting.FileSystemObject',@f OUT;"
                 f"EXEC sp_OAMethod @f,'OpenTextFile',@x OUT,'{self._tsql_escape(path)}',{mode},1;"
-                f"EXEC sp_OAMethod @x,'Write',NULL,'{self._tsql_escape(chunk)}';"
+                f"EXEC sp_OAMethod @x,'Write',NULL,{val_expr};"
                 "EXEC sp_OAMethod @x,'Close';"
                 "EXEC sp_OADestroy @f;"
             )
