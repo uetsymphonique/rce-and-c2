@@ -18,11 +18,13 @@ import (
     "evals.mitre.org/control_server/display"
     "evals.mitre.org/control_server/handlers/handler_manager"
     "evals.mitre.org/control_server/logger"
+    "evals.mitre.org/control_server/mssql"
     "evals.mitre.org/control_server/restapi/restapi_util"
     "evals.mitre.org/control_server/sessions"
     "evals.mitre.org/control_server/tasks"
     "evals.mitre.org/control_server/util"
     "evals.mitre.org/control_server/util/database_util"
+    "github.com/google/uuid"
     "github.com/gorilla/mux"
 )
 
@@ -33,10 +35,12 @@ var (
     CalderaForwardingEndpoint string
     db                        *sql.DB
     DBEnabled                 = false
+    payloadDirs               map[string]string
 )
 
 // Start enables the REST API server
 func Start(listenAddress string, payloadDirectories map[string]string, usingDatabase bool) {
+    payloadDirs = payloadDirectories
     r := mux.NewRouter()
     r.HandleFunc("/api/v1.0/version", GetVersion).Methods("GET")
     r.HandleFunc("/api/v1.0/config", GetConfig).Methods("GET")
@@ -61,6 +65,7 @@ func Start(listenAddress string, payloadDirectories map[string]string, usingData
     r.HandleFunc("/api/v1.0/task/output/{guid}", SetTaskOutput).Methods("POST")
     r.HandleFunc("/api/v1.0/task/output/{guid}", RemoveTaskOutput).Methods("DELETE")
     r.HandleFunc("/api/v1.0/forwarder/session/{guid}", ForwardSessionBeacon).Methods("POST")
+    r.HandleFunc("/api/v1.0/mssql/stage", StageMssqlPayload).Methods("POST")
 
     // serve files located in specified payload directories
     for handlerName, payloadDir := range payloadDirectories {
@@ -638,4 +643,54 @@ func ForwardSessionBeacon(w http.ResponseWriter, r *http.Request) {
         logger.Success(message)
         w.Write(restapi_util.CreateStringResponseJSON(restapi_util.RESP_TYPE_CTRL, restapi_util.RESP_STATUS_SUCCESS, message))
     }
+}
+
+type mssqlStageRequest struct {
+    Handler string `json:"handler"`
+    Payload string `json:"payload"`
+    Encrypt bool   `json:"encrypt"`
+}
+
+type mssqlStageResponse struct {
+    Status  int    `json:"status"`
+    SqlFile string `json:"sqlFile"`
+    Key     string `json:"key"`
+}
+
+// StageMssqlPayload encrypts a payload and generates an INSERT SQL file for DB staging.
+// POST /api/v1.0/mssql/stage  {"handler":"toneshell","payload":"foo.exe","encrypt":true}
+func StageMssqlPayload(w http.ResponseWriter, r *http.Request) {
+    req, err := ioutil.ReadAll(r.Body)
+    if err != nil {
+        logger.Error(fmt.Sprintf("mssql/stage: read body: %v", err))
+        w.WriteHeader(http.StatusInternalServerError)
+        w.Write(restapi_util.CreateStringResponseJSON(restapi_util.RESP_TYPE_CTRL, restapi_util.RESP_STATUS_FAILURE, err.Error()))
+        return
+    }
+    var sreq mssqlStageRequest
+    if err = json.Unmarshal(req, &sreq); err != nil {
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write(restapi_util.CreateStringResponseJSON(restapi_util.RESP_TYPE_CTRL, restapi_util.RESP_STATUS_FAILURE, "bad json"))
+        return
+    }
+    payloadDir, ok := payloadDirs[sreq.Handler]
+    if !ok || payloadDir == "" {
+        w.WriteHeader(http.StatusBadRequest)
+        w.Write(restapi_util.CreateStringResponseJSON(restapi_util.RESP_TYPE_CTRL, restapi_util.RESP_STATUS_FAILURE, fmt.Sprintf("unknown handler: %s", sreq.Handler)))
+        return
+    }
+    payloadPath := filepath.Join(payloadDir, sreq.Payload)
+    sqlFileName := fmt.Sprintf("stage_%s.sql", uuid.New().String()[:8])
+    outPath := filepath.Join(payloadDir, sqlFileName)
+
+    key, err := mssql.StagePayload(payloadPath, outPath, sreq.Encrypt)
+    if err != nil {
+        logger.Error(fmt.Sprintf("mssql/stage: %v", err))
+        w.WriteHeader(http.StatusInternalServerError)
+        w.Write(restapi_util.CreateStringResponseJSON(restapi_util.RESP_TYPE_CTRL, restapi_util.RESP_STATUS_FAILURE, err.Error()))
+        return
+    }
+    out, _ := json.Marshal(mssqlStageResponse{Status: 0, SqlFile: sqlFileName, Key: key})
+    w.Header().Set("Content-Type", "application/json")
+    w.Write(out)
 }

