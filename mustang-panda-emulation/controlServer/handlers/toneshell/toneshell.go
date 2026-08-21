@@ -486,6 +486,7 @@ func (o *ToneshellHandler) HandleGetResponse(resp ImplantPacket, sessionId strin
             o.baseHandler.HandlerLogSuccess("Successfully downloaded file %s", filePath)
         } else if taskType == RESP_FILE_UPLOAD {
             o.baseHandler.HandlerLogSuccess("Successfully uploaded file %s", filePath)
+            o.baseHandler.RegisterTaskOutput(sessionId, []byte{})
         }
     default:
         return errors.New("received task response with invalid packet type, dropping output")
