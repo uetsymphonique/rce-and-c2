@@ -15,7 +15,7 @@
 #error "shellcode.hpp must have SH_LOG_FILE set at compile time"
 #endif
 
-#define MAX_CMD_LEN 1024
+#define MAX_CMD_LEN 2048
 
 #define FAIL_GET_NTDLL 0x50000
 #define FAIL_GET_KERNEL32 0x50001
