@@ -439,7 +439,7 @@ class XpMssql:
         import shutil as _sh, os as _os
         base  = _os.path.dirname(_os.path.abspath(__file__))
         src   = _os.path.join(base, "sql", "xpagent_init.sql")
-        dst   = _os.path.join(base, "..", "payloads", "toneshell", "xpagent_init.sql")
+        dst   = _os.path.join(base, "..", "payloads", "xpagent_init.sql")
         try:
             _sh.copy2(src, dst)
         except OSError as e:
