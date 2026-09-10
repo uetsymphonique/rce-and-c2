@@ -467,9 +467,14 @@ class XpMssql:
 
     def _xpagent_insert(self, shell, cmd: str) -> "int | None":
         """INSERT a command into xpagent.dbo.cmd and return its cmd_id."""
+        # Use CHAR(34) for embedded " — same pattern as _sp_oa_write — to keep
+        # double-quotes out of the T-SQL literal so _exec_q's "" escaping never
+        # fires on content, which would otherwise break cmd.exe quoting state.
+        segs     = self._tsql_escape(cmd).split('"')
+        val_expr = '+CHAR(34)+'.join(f"N'{s}'" for s in segs)
         insert_out = self._exec_q(shell,
             "EXECUTE AS LOGIN='sa';"
-            f"INSERT INTO xpagent.dbo.cmd (cmd) VALUES (N'{self._tsql_escape(cmd)}');"
+            f"INSERT INTO xpagent.dbo.cmd (cmd) VALUES ({val_expr});"
             "SELECT CAST(SCOPE_IDENTITY() AS INT);"
         )
         for line in (insert_out or "").splitlines():
