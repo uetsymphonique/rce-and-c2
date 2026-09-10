@@ -468,8 +468,8 @@ class XpMssql:
     def _xpagent_insert(self, shell, cmd: str) -> "int | None":
         """INSERT a command into xpagent.dbo.cmd and return its cmd_id."""
         insert_out = self._exec_q(shell,
-            "EXECUTE AS LOGIN='sa'; USE xpagent;"
-            f"INSERT INTO dbo.cmd (cmd) VALUES (N'{self._tsql_escape(cmd)}');"
+            "EXECUTE AS LOGIN='sa';"
+            f"INSERT INTO xpagent.dbo.cmd (cmd) VALUES (N'{self._tsql_escape(cmd)}');"
             "SELECT CAST(SCOPE_IDENTITY() AS INT);"
         )
         for line in (insert_out or "").splitlines():
@@ -489,8 +489,8 @@ class XpMssql:
         status = None
         while time.time() < deadline:
             status_out = self._exec_q(shell,
-                f"EXECUTE AS LOGIN='sa'; USE xpagent;"
-                f"SELECT status FROM dbo.cmd WHERE id={cmd_id};"
+                f"EXECUTE AS LOGIN='sa';"
+                f"SELECT status FROM xpagent.dbo.cmd WHERE id={cmd_id};"
             )
             for line in (status_out or "").splitlines():
                 s = line.strip()
@@ -516,8 +516,8 @@ class XpMssql:
     def cmd_xpout(self, shell, cmd_id: int):
         """Read and print output rows for a given cmd_id from xpagent.dbo.out."""
         out = self._exec_q(shell,
-            f"EXECUTE AS LOGIN='sa'; USE xpagent;"
-            f"SELECT chunk FROM dbo.out WHERE cmd_id={cmd_id} ORDER BY seq;"
+            f"EXECUTE AS LOGIN='sa';"
+            f"SELECT chunk FROM xpagent.dbo.out WHERE cmd_id={cmd_id} ORDER BY seq;"
         )
         print(out or f"(no output rows for cmd_id={cmd_id})")
 
