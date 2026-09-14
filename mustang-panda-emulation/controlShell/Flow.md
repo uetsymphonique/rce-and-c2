@@ -1,6 +1,6 @@
-# toneshell_shell.py — Flow
+# controlShell — Flow
 
-**Entry:** `ToneShellShell.run()` dispatch loop  ·  **Artifact summary:** operator shell that routes C2 tasks to TONESHELL implant on WS01 and, via the XpMssql module, drives xp_cmdshell execution and DB-channel staging on IIS01
+**Entry:** `ToneShellShell.run()` dispatch loop  ·  **Artifact summary:** operator shell that routes C2 tasks to TONESHELL implant on WS01 and, via the XpMssql module, drives xp_cmdshell execution and DB-channel staging/exfil on IIS01; xpagent section adds a Service Broker in-DB async agent on IIS01
 
 Behaviors are grouped by command path in operational order. Artifact classes follow the six-class filter; `[no-artifact]` tags intent-bearing links with no victim-host trace.
 
@@ -48,3 +48,15 @@ Behaviors are grouped by command path in operational order. Artifact classes fol
 | 29 | WS01 implant deletes `C:\Windows\Temp\<local_name>.chunk{i}` via `cmd /c del /f` | — [no-artifact] | Stealth / T1070.004 — Indicator Removal: File Deletion | post-pull cleanup; runs only after FILE_UPLOAD task confirmed FINISHED |
 | **(end per-chunk loop)** | | | | |
 | 30 | Python operator shell reads `files/<local_name>.chunk0` … `files/<local_name>.chunk{N-1}` in order, streams each into `files/<local_name>` via 1 MB read loop, then deletes each chunk file | assembled plaintext file in C2 `files/` dir [file] | — | local file-system operation on C2 host; no network I/O; chunk files removed after concatenation |
+| **— xpagent init —** | | | | |
+| 31 | C2 operator copies `xpagent_init.sql` from `controlServer/sql/` to `payloads/` on C2 host via `shutil.copy2` | SQL file in C2 payloads dir [file] → #32 | — | local C2 file-system op; source is the DDL script for all xpagent DB objects |
+| 32 | WS01 implant receives `FILE_DOWNLOAD` (id=3) and downloads `xpagent_init.sql` from C2 payloads dir to `C:\Windows\Temp\xpagent_init.sql` | SQL file on WS01 [file] → #33 | — | same C2 file-push mechanism as #11 and #17 |
+| 33 | WS01 implant runs EXEC task `sqlcmd -i C:\Windows\Temp\xpagent_init.sql` executing DDL against `IIS01\SQLEXPRESS`: creates `xpagent` database, `dbo.cmd` / `dbo.out` tables, AFTER INSERT trigger, Service Broker message type / contract / queue / service, and activation procedure `agent_worker` | DB schema objects in `xpagent` database [no-artifact] → #35, #36, #38, #39 | — | DDL creation events visible in SQL Audit; `sqlservr.exe` reads from `sys.sql_modules`; objects survive session, lost on `xpagent kill` (#39) |
+| 34 | WS01 implant runs EXEC task `cmd /c del /f C:\Windows\Temp\xpagent_init.sql` deleting the DDL script | — [no-artifact] | — | post-init cleanup on WS01 |
+| **— xpexec / xpexec-bg —** | | | | |
+| 35 | WS01 implant runs `sqlcmd -Q "INSERT INTO xpagent.dbo.cmd(cmd) VALUES(...)"` inserting operator command text; AFTER INSERT trigger fires `BEGIN DIALOG CONVERSATION … SEND` enqueuing a Service Broker message | row in `xpagent.dbo.cmd` + SB message queued [no-artifact] → #36 | — | `xpexec-bg` stops here and returns cmd_id; `xpexec` continues to #37; SB conversation is self-dialog within `xpagent` DB |
+| 36 | IIS01 SQL Server Service Broker activates `agent_worker` proc (EXECUTE AS OWNER = sa); proc RECEIVEs message, parses `cmd_id\|command` body, calls `xp_cmdshell @cmd` (variable — no literal embedding), INSERTs stdout rows into `xpagent.dbo.out`, UPDATEs `dbo.cmd.status` to 2 (done) or 3 (error), calls `END CONVERSATION` | output rows in `xpagent.dbo.out` + status=2 in `dbo.cmd` [no-artifact] → #37, #38 | — | autonomous in-DB execution; `cmd.exe` spawned as `NT SERVICE\MSSQL$SQLEXPRESS`; second activation cycle handles EndDialog cleanup (no separate row — same proc, no artifact) |
+| 37 | WS01 implant runs `sqlcmd -Q "SELECT status FROM xpagent.dbo.cmd WHERE id=<cmd_id>"` every 2 s until status=2 or status=3; operator shell blocks on `_exec_q` poll loop | — [no-artifact] → #38 | — | polling equivalent of task-status poll on C2 API; driven by operator shell timer |
+| 38 | WS01 implant runs `sqlcmd -Q "SELECT chunk FROM xpagent.dbo.out WHERE cmd_id=<cmd_id> ORDER BY seq"` to retrieve command output | — [no-artifact] | — | terminal step; output printed to operator; no artifact left |
+| **— xpagent kill —** | | | | |
+| 39 | WS01 implant runs `sqlcmd -Q "ALTER DATABASE xpagent SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE xpagent"` on IIS01 dropping all xpagent objects | — [no-artifact] | — | removes all DB objects created by #33; DDL DROP events visible in SQL Audit |

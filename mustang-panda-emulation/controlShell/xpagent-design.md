@@ -2,7 +2,7 @@
 
 **Status:** Design — not yet implemented
 **Replaces:** per-command `.bat`/`.ps1` staging in the `XpMssql` module (`toneshell_shell.py`)
-**Related docs:** [`mssql-module-changelog.md`](mssql-module-changelog.md), [`xpexfil-design.md`](xpexfil-design.md), [`controlServer/TONESHELL_SHELL.md`](controlServer/TONESHELL_SHELL.md)
+**Related docs:** [`mssql-module-changelog.md`](mssql-module-changelog.md), [`xpexfil-design.md`](xpexfil-design.md), [`README.md`](README.md)
 
 ---
 
