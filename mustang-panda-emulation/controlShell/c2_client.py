@@ -159,7 +159,7 @@ class C2Client:
             print(f"[+] file-get complete: {output.strip()}")
         else:
             label = dest_name or remote_path.rsplit("\\", 1)[-1]
-            print(f"[+] file-get complete → C2 files/{label}")
+            print(f"[+] file-get complete: C2 files/{label}")
 
     def cmd_put_wait(self, payload_name: str, remote_dest: str, timeout_s: int = 180):
         """Push a file to the implant and block until transfer is complete."""
@@ -176,7 +176,7 @@ class C2Client:
         elif output.strip():
             print(f"[+] file-put complete: {output.strip()}")
         else:
-            print(f"[+] file-put complete → implant:{remote_dest}")
+            print(f"[+] file-put complete: implant:{remote_dest}")
 
     def cmd_put(self, payload_name: str, remote_dest: str):
         """Push a file FROM the C2 server payloads dir TO the implant."""

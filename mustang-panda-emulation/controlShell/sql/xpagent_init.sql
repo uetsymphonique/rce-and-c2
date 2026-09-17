@@ -5,9 +5,9 @@
 --   tempdb không cho SET TRUSTWORTHY ON (bị SQL Server block).
 --   SB activation EXECUTE AS OWNER = database-level token; cert signing
 --   chỉ thêm server-level perms, không được áp dụng vào database-level token.
---   TRUSTWORTHY ON + dbo=sa → EXECUTE AS OWNER kế thừa full sysadmin → xp_cmdshell OK.
+--   TRUSTWORTHY ON + dbo=sa; EXECUTE AS OWNER inherits full sysadmin, xp_cmdshell OK.
 --
--- Note: không có REVERT cuối script (sqlcmd session tự kết thúc → impersonation
+-- Note: không có REVERT cuối script (sqlcmd session tự kết thúc, impersonation
 -- tự drop). REVERT yêu cầu cùng database với EXECUTE AS nhưng script cần
 -- switch sang xpagent để tạo objects — conflict không giải quyết được sạch.
 
@@ -58,7 +58,7 @@ GO
 
 -- ============================================================
 -- 2. Worker proc (tạo trước queue để PROCEDURE_NAME resolve được)
---    EXECUTE AS OWNER trong TRUSTWORTHY DB với dbo=sa → sysadmin → xp_cmdshell OK
+--    EXECUTE AS OWNER in TRUSTWORTHY DB with dbo=sa, sysadmin privileges, xp_cmdshell OK
 -- ============================================================
 CREATE PROCEDURE dbo.agent_worker AS
 BEGIN
@@ -115,7 +115,7 @@ CREATE SERVICE [agent_svc] ON QUEUE dbo.agent_work ([agent/contract]);
 GO
 
 -- ============================================================
--- 4. Trigger: INSERT → SB self-dialog → activation
+-- 4. Trigger: INSERT fires SB self-dialog, activation
 -- ============================================================
 CREATE TRIGGER trg_agent_cmd ON dbo.cmd AFTER INSERT AS
 BEGIN
