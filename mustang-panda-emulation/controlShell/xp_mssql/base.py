@@ -181,6 +181,7 @@ class XpMssqlBase:
             "DECLARE @s INT,@text NVARCHAR(MAX);"
             "EXEC sp_OACreate 'ADODB.Stream',@s OUT;"
             "EXEC sp_OASetProperty @s,'Type',2;"
+            "EXEC sp_OASetProperty @s,'Charset','ascii';"
             "EXEC sp_OAMethod @s,'Open';"
             f"EXEC sp_OAMethod @s,'LoadFromFile',NULL,"
             f"'{self._tsql_escape(path)}';"
