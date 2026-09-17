@@ -1,25 +1,27 @@
 ﻿# controlShell
 
-**Purpose:** Interactive operator shell for ToneShell C2 sessions, with two lateral execution channels into IIS01 through the MSSQL tunnel — `xpshell` (file-staging via sp_OA + xp_cmdshell) and `xpagent` (in-database async agent via Service Broker).
+**Purpose:** Interactive operator shell for ToneShell C2 sessions, with three lateral execution channels into IIS01 through the MSSQL tunnel — `xpshell` (file-staging via sp_OA + xp_cmdshell), `xpagent` (in-database async agent via Service Broker), and `xprun` (direct PE execution via sp_OA WScript.Shell.Run — no cmd.exe).
 
 ## Overview
 
-`controlShell` wraps the evalsC2client REST API with a persistent interactive prompt so operators do not need to craft JSON task packets or manage session GUIDs manually. Every built-in command maps to one of three transports:
+`controlShell` wraps the evalsC2client REST API with a persistent interactive prompt so operators do not need to craft JSON task packets or manage session GUIDs manually. Every built-in command maps to one of four transports:
 
 - **Direct C2** (`sessions`, `use`, bare commands, `get`, `put`, `kill`): JSON task packets posted to the ToneShell implant on WS01 via `POST /api/v1.0/session/<guid>/task`, output polled at `GET /api/v1.0/task/<task_guid>`.
 - **xpshell tunnel** (`xpinit`, `xpshell`, `xpstage`, `xpstage-hex`, `xpexfil`): chains of `sqlcmd` EXEC tasks on WS01 that reach IIS01 through `sp_OA`/`xp_cmdshell`. Each command stages a temporary `.bat` or `.ps1` to `C:\ProgramData\`, executes it, reads output, then deletes. `xpstage` transfers AES-256-CBC encrypted binaries entirely through `tempdb`; `xpstage-hex` is the improved variant that decodes+writes entirely in T-SQL via ADODB.Stream — no process spawn or disk artifact on IIS01. `xpexfil` reverses the channel to pull files out in encrypted chunks.
 - **xpagent tunnel** (`xpagent init`, `xpexec`, `xpexec-bg`, `xpout`, `xpagent kill`): a one-time SQL Server object set (table + AFTER INSERT trigger + Service Broker queue + activation procedure) deployed to IIS01 `tempdb`. Commands are submitted as INSERTs and executed asynchronously by the activated procedure via `xp_cmdshell @variable` — no `.bat`/`.ps1` ever written to disk per command. Reduces per-command MSSQL task count from 4–6 to 2 and eliminates intermediate disk artifacts.
+- **xprun direct execution** (`xprun`, `xprun-out`): sp_OA `WScript.Shell.Run` calls `ShellExecuteEx` to launch PE files directly — process chain is `sqlservr.exe → target.exe` with no `cmd.exe` intermediate. `xprun` returns exit code only; `xprun-out` chains with the `-o <file>` flag on the target exe + `xpfile cat` + `xpfile del` to capture and return stdout. Entire chain uses sp_OA only — zero `cmd.exe` spawns.
 
 ```
 Operator
   │
   ├─ Direct C2 ──► REST API ──► TONESHELL (WS01) ──► implant commands
   │
-  └─ MSSQL tunnel (both variants):
+  └─ MSSQL tunnel (all variants):
        REST API ──► TONESHELL (WS01) ──► sqlcmd ──► IIS01\SQLEXPRESS
                                                         │
                                           xpshell: xp_cmdshell / sp_OA (staged files)
                                           xpagent: Service Broker trigger -> xp_cmdshell @var
+                                          xprun:   sp_OA WScript.Shell.Run -> ShellExecuteEx (no cmd.exe)
 ```
 
 ## Lab topology
@@ -29,7 +31,7 @@ graph LR
     subgraph domain["TESTLAB.LOCAL"]
         WS01["WS01<br/>Windows 11 Pro<br/>TONESHELL v2 implant<br/>svc_app_dev · sqlcmd"]
         IIS01["IIS01<br/>Windows Server 2022<br/>IIS + SQL Server Express<br/>IIS01\\SQLEXPRESS"]
-        WS01 -->|"sqlcmd TCP/1433<br/>xpshell · xpagent"| IIS01
+        WS01 -->|"sqlcmd TCP/1433<br/>xpshell · xpagent · xprun"| IIS01
     end
 
     OP["Operator machine<br/>controlServer :9999<br/>toneshell_shell.py"]
@@ -152,6 +154,31 @@ Must run `xpinit` then `xpagent init`. Creates a one-time set of objects in `tem
 | `xpout <cmd_id>` | Read output rows for a previously queued command |
 
 `xpexec` vs `xpshell cmd` trade-off: `xpexec` costs 2 tasks and writes no disk artifacts; `xpshell cmd` costs 4–6 tasks and writes `.bat` + output `.txt` to `C:\ProgramData\`. Use `xpexec` when the xpagent is initialized; use `xpshell` when comparing detection signals or the xpagent is not yet deployed.
+
+### xprun direct execution (sp_OA WScript.Shell.Run — no cmd.exe)
+
+Must run `xpinit` first. Requires the target to be a PE file (`.exe`) already staged on IIS01 (via `xpstage-hex`). Uses `sp_OA WScript.Shell.Run` which calls `ShellExecuteEx` internally — the process chain is `sqlservr.exe → target.exe` with no `cmd.exe` in between.
+
+| Command | What it does |
+|---|---|
+| `xprun <exe_command>` | Direct PE execution via sp_OA `WScript.Shell.Run`; returns exit code only, no stdout capture |
+| `xprun-out <exe_command>` | Same as `xprun` but injects `-o <temp.txt>` flag → blocks until done → `xpfile cat` reads output → `xpfile del` cleans up |
+
+`xprun-out` requires the target exe to support the `-o <file>` flag for stdout redirection (e.g. `go-thehash.exe -o temp.txt pipe ...`). The entire chain — execution, output read, cleanup — uses sp_OA only with zero `cmd.exe` spawns.
+
+`xpexec` vs `xprun` trade-off:
+
+| | `xpexec` | `xprun` | `xprun-out` |
+|---|---|---|---|
+| Mechanism | xpagent Service Broker → `xp_cmdshell @var` | sp_OA `WScript.Shell.Run` → `ShellExecuteEx` | sp_OA Run + `-o file` + `xpfile cat` + `xpfile del` |
+| Process chain on IIS01 | `sqlservr.exe → cmd.exe → target.exe` | `sqlservr.exe → target.exe` | `sqlservr.exe → target.exe` (output via sp_OA COM) |
+| cmd.exe spawn | yes (always) | no | no |
+| Stdout capture | yes (xp_cmdshell returns result set) | no (exit code only) | yes (via `-o` flag + xpfile cat) |
+| Requires xpagent | yes (`xpagent init` first) | no (sp_OA from `xpinit` only) | no |
+| Requires `-o` flag on exe | no | no | yes |
+| Works with Windows built-ins | yes (`net`, `sc`, `powershell`, etc.) | no (PE files only) | no (PE files with `-o` support only) |
+
+Use `xprun`/`xprun-out` for PE file execution (go-thehash, CertEnrollSvc) to eliminate cmd.exe from the process tree. Use `xpexec` for Windows built-in commands (`sc query`, `net group`, `powershell`) that require cmd.exe for stdout capture.
 
 ---
 

