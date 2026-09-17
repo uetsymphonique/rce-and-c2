@@ -484,6 +484,7 @@ func (o *ToneshellHandler) HandleGetResponse(resp ImplantPacket, sessionId strin
             }
         } else if taskType == RESP_FILE_DOWNLOAD {
             o.baseHandler.HandlerLogSuccess("Successfully downloaded file %s", filePath)
+            o.baseHandler.RegisterTaskOutput(sessionId, []byte{})
         } else if taskType == RESP_FILE_UPLOAD {
             o.baseHandler.HandlerLogSuccess("Successfully uploaded file %s", filePath)
             o.baseHandler.RegisterTaskOutput(sessionId, []byte{})

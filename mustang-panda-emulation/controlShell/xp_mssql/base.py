@@ -28,6 +28,15 @@ class XpMssqlBase:
         """Escape a value for embedding inside a T-SQL string literal '...'."""
         return s.replace("'", "''")
 
+    def _tsql_char34_expr(self, s: str) -> str:
+        """Build T-SQL expression for a string that may contain double quotes.
+        Splits on " and joins with CHAR(34) so no " appears in the T-SQL literal,
+        avoiding sqlcmd -Q "..." command-line parsing issues."""
+        if '"' not in s:
+            return f"'{self._tsql_escape(s)}'"
+        segs = s.split('"')
+        return '+CHAR(34)+'.join(f"'{self._tsql_escape(seg)}'" for seg in segs)
+
     def _sqlcmd_prefix(self) -> str:
         return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C'
 
@@ -109,12 +118,13 @@ class XpMssqlBase:
         """Run an exe directly on IIS01 via sp_OA WScript.Shell.Run (no cmd.exe).
         Returns exit code only — no stdout capture. Use cmd_xprun_out for output."""
         wait_flag = "1" if wait else "0"
+        cmd_expr = self._tsql_char34_expr(exe_cmd)
         tsql = (
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @sh INT,@rc INT;"
+            "DECLARE @sh INT,@rc INT,@cmd NVARCHAR(4000);"
             "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
-            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,"
-            f"'{self._tsql_escape(exe_cmd)}',0,{wait_flag};"
+            f"SET @cmd={cmd_expr};"
+            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,{wait_flag};"
             "SELECT @rc AS exit_code;"
             "EXEC sp_OADestroy @sh;"
         )
@@ -127,12 +137,13 @@ class XpMssqlBase:
         if out_file is None:
             out_file = self._rand_tmp("txt")
         full_cmd = f'{exe_cmd} -o {out_file}'
+        cmd_expr = self._tsql_char34_expr(full_cmd)
         wait_tsql = (
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @sh INT,@rc INT;"
+            "DECLARE @sh INT,@rc INT,@cmd NVARCHAR(4000);"
             "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
-            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,"
-            f"'{self._tsql_escape(full_cmd)}',0,1;"
+            f"SET @cmd={cmd_expr};"
+            "EXEC sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,1;"
             "EXEC sp_OADestroy @sh;"
         )
         self._exec_q(shell, wait_tsql)
