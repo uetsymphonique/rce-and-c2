@@ -38,7 +38,7 @@ class XpMssqlBase:
         return '+CHAR(34)+'.join(f"'{self._tsql_escape(seg)}'" for seg in segs)
 
     def _sqlcmd_prefix(self) -> str:
-        return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C'
+        return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C -y 0'
 
     def _exec_q(self, shell, tsql: str, timeout_s: int = None) -> str:
         """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
