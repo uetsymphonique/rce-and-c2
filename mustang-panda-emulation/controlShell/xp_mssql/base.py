@@ -137,7 +137,10 @@ class XpMssqlBase:
         Entire chain uses sp_OA only — no cmd.exe spawn."""
         if out_file is None:
             out_file = self._rand_tmp("txt")
-        full_cmd = f'{exe_cmd} -o {out_file}'
+        parts = exe_cmd.split(None, 1)
+        exe_path = parts[0]
+        exe_args = parts[1] if len(parts) > 1 else ""
+        full_cmd = f'{exe_path} -o {out_file} {exe_args}'.rstrip()
         cmd_expr = self._tsql_char34_expr(full_cmd)
         wait_tsql = (
             "EXECUTE AS LOGIN='sa';"
