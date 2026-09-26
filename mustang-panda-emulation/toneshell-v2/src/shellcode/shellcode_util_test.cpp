@@ -52,6 +52,7 @@ TEST(ShellcodeUtilTest, TestApiResolution) {
     EXPECT_EQ((FARPROC)(fp.shared_fp.fp_HeapDestroy), GetProcAddress(fp.h_kernel32, "HeapDestroy"));
     EXPECT_EQ((FARPROC)(fp.shared_fp.fp_HeapFree), GetProcAddress(fp.h_kernel32, "HeapFree"));
     EXPECT_EQ((FARPROC)(fp.shared_fp.fp_WriteFile), GetProcAddress(fp.h_kernel32, "WriteFile"));
+    EXPECT_EQ((FARPROC)(fp.shared_fp.fp_MoveFileExW), GetProcAddress(fp.h_kernel32, "MoveFileExW"));
     EXPECT_EQ((FARPROC)(fp.shared_fp.fp_BCryptGenRandom), GetProcAddress(fp.h_bcrypt, "BCryptGenRandom"));
     EXPECT_EQ((FARPROC)(fp.fp_WSAStartup), GetProcAddress(fp.h_ws2_32, "WSAStartup"));
     EXPECT_EQ((FARPROC)(fp.fp_WSAGetLastError), GetProcAddress(fp.h_ws2_32, "WSAGetLastError"));

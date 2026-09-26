@@ -23,6 +23,7 @@
 #define FAIL_GET_HEAPFREE 0x51020
 #define FAIL_GET_WRITEFILE 0x51021
 #define FAIL_GET_BCRYPTGENRANDOM 0x51022
+#define FAIL_GET_MOVEFILEEXW 0x51023
 
 #define FAIL_HEAP_ALLOCATION 0x52001
 
@@ -38,6 +39,7 @@ using HeapCreate_t = decltype(&HeapCreate);
 using HeapDestroy_t = decltype(&HeapDestroy);
 using HeapFree_t = decltype(&HeapFree);
 using WriteFile_t = decltype(&WriteFile);
+using MoveFileExW_t = decltype(&MoveFileExW);
 using BCryptGenRandom_t = decltype(&BCryptGenRandom);
 
 struct shared_func_pointers {
@@ -53,5 +55,6 @@ struct shared_func_pointers {
     HeapDestroy_t fp_HeapDestroy;
     HeapFree_t fp_HeapFree;
     WriteFile_t fp_WriteFile;
+    MoveFileExW_t fp_MoveFileExW;
     BCryptGenRandom_t fp_BCryptGenRandom;
 };

@@ -165,6 +165,11 @@ DWORD FetchFunctions(func_pointers* fp) {
         return FAIL_GET_WRITEFILE;
     }
 
+    fp->shared_fp.fp_MoveFileExW = GP(fp->h_kernel32, MoveFileExW, by_fnv1a);
+    if (!(fp->shared_fp.fp_MoveFileExW)) {
+        return FAIL_GET_MOVEFILEEXW;
+    }
+
     fp->shared_fp.fp_BCryptGenRandom = GP(fp->h_bcrypt, BCryptGenRandom, by_fnv1a);
     if (!(fp->shared_fp.fp_BCryptGenRandom)) {
         return FAIL_GET_BCRYPTGENRANDOM;

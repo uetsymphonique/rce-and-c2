@@ -81,6 +81,7 @@ When executed, the shellcode will do the following:
 - Routinely beacons out to the C2 server to request tasking. The following tasks are supported:
   - Execute process<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/),[8](https://www.trendmicro.com/en_us/research/23/f/behind-the-scenes-unveiling-the-hidden-workings-of-earth-preta.html)</sup>
   - Download files<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/)</sup>
+    - Downloads are staged on disk under a benign extension (`<dest>.stl`) and renamed in-process to the final destination path via `MoveFileExW` (`MOVEFILE_REPLACE_EXISTING`) once the write completes — no child process is spawned for the rename<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
   - Upload files<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/)</sup>
   - Terminate self
 
@@ -124,7 +125,7 @@ The backdoor shellcode will first establish C2 communications by establishing a 
 After establishing the handshake, the shellcode will then send beacon messages (message type `0x02`) to request tasking.
 The server will respond with one of the following task codes:
 
-- `0x3` - file download. The shellcode will then send file chunk requests (type `0x13`) until the entire file is downloaded or until an error occurs.
+- `0x3` - file download. The shellcode will then send file chunk requests (type `0x13`) until the entire file is downloaded or until an error occurs. The file is written to `<dest>.stl` first and renamed in-process to the destination path after the download completes.
 - `0x4` - no tasking. The shellcode will simply sleep until the next beacon.
 - `0x5` - execute process. The server will provide a timeout value in seconds and a command line to execute that contains an executable name and optional arguments.
 - `0x7` - file upload. The shellcode will then send file upload chunks as task output until the entire file is uploaded or until an error occurs.

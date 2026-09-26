@@ -47,6 +47,7 @@ protected:
         HeapDestroy,
         HeapFree,
         WriteFile,
+        MoveFileExW,
         mock_BCryptGenRandom
     };
 

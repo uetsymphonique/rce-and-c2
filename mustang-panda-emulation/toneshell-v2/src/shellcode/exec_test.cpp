@@ -62,6 +62,10 @@ protected:
         if (std::filesystem::exists(test_download_dst)) {
             ASSERT_TRUE(std::filesystem::remove(test_download_dst));
         }
+        std::string staging_dst = std::string(test_download_dst) + ".stl";
+        if (std::filesystem::exists(staging_dst)) {
+            ASSERT_TRUE(std::filesystem::remove(staging_dst));
+        }
         if (std::filesystem::exists(test_upload_src)) {
             ASSERT_TRUE(std::filesystem::remove(test_upload_src));
         }

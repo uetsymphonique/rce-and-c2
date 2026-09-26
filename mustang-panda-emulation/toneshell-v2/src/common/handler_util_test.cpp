@@ -25,6 +25,7 @@ TEST(HandlerUtilTest, TestResolveSharedApis) {
     EXPECT_EQ((FARPROC)fp.fp_HeapDestroy, GetProcAddress(h_kernel32, "HeapDestroy"));
     EXPECT_EQ((FARPROC)fp.fp_HeapFree, GetProcAddress(h_kernel32, "HeapFree"));
     EXPECT_EQ((FARPROC)fp.fp_WriteFile, GetProcAddress(h_kernel32, "WriteFile"));
+    EXPECT_EQ((FARPROC)fp.fp_MoveFileExW, GetProcAddress(h_kernel32, "MoveFileExW"));
     EXPECT_EQ((FARPROC)fp.fp_BCryptGenRandom, GetProcAddress(h_bcrypt, "BCryptGenRandom"));
 }
 
