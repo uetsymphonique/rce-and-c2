@@ -237,7 +237,7 @@ Ba lỗi thực chiến khi exfil `g.dmp` 108 MB (13 chunks) qua `xpexfil-hex`.
 
 Batch `_build_exfil_insert_tsql` chạy ~27k INSERT; mỗi INSERT in `(1 row affected)` (`-y 0` không truncate) → ~480 KB stdout, implant stream ~250 chunk 1890-byte, pipe backpressure làm batch chậm thêm.
 
-**Fix** (`xp_mssql/exfil.py`): thêm `SET NOCOUNT ON;` ngay sau `EXECUTE AS LOGIN='sa';` trong `_build_exfil_insert_tsql` — stdout còn lại chỉ 3 dòng SELECT cuối. Chỉ áp cho hex-exfil; các batch khác không có loop INSERT qua xp_cmdshell nên giữ nguyên.
+**Fix** (`xp_mssql/exfil.py`): thêm `SET NOCOUNT ON;` ngay sau `EXECUTE AS LOGIN='sa';` trong `_build_exfil_insert_tsql` — stdout còn lại chỉ 3 dòng SELECT cuối. *(Cập nhật 2026-09-28: nhận định "các batch khác không có loop INSERT" không đúng — stage SQL của xpstage/xpstage-hex cũng là loop INSERT, fix NOCOUNT áp cả cho generator server-side, xem mục 4 bên dưới.)*
 
 ### 3. `files/` biến mất giữa chừng → hex0–hex3 "uploaded" ảo, content mất
 
@@ -246,3 +246,13 @@ Repo trên kali bị `git clean`/checkout giữa run → `controlServer/files/` 
 **Fix 1** (`util/util.go`): `os.MkdirAll(UploadDir, 0755)` trong `SetRootDirectories()` — server tự tạo lại dir lúc khởi động, hết cần mkdir tay.
 
 **Fix 2** (`toneshell.go`, nhánh `RESP_FILE_UPLOAD`): trước khi log success, `os.Stat(filePath)` — file missing hoặc 0 byte → log `UPLOAD FAILED for <path>: ...` và register message làm task output; operator shell in ra thay vì success ảo.
+
+---
+
+## 4. xpstage-hex tái hiện 0x60004 (393220) + stage SQL không có NOCOUNT (2026-09-28)
+
+Khi chạy `xpstage-hex` gặp lại `FAIL_TASK_TIMEOUT_REACHED (0x60004)` như exfil.
+
+**Link về chuỗi cũ:** mọi lệnh sqlcmd của xpstage đều là TONESHELL EXEC task đi qua `_exec_q` → `cmd_exec_raw` — task dễ chết nhất là **stage INSERT batch** (`sqlcmd -i stage_<id>.stl`, hàng trăm-nghìn INSERT, blocking). Nếu kali chưa sync `c2_client.py` có key `timeout`, task vẫn rơi về `DEFAULT_TASK_TIMEOUT = 120` → 0x60004. Nếu đã sync, operator phải `timeout 720` trước khi gọi (mặc định `self._timeout_s = 120`).
+
+**Fix NOCOUNT** (`controlServer/mssql/mssql.go`): cả `StagePayload` (classic AES/base64) và `StagePayloadHex` (hex) đều sinh SQL file **không có** `SET NOCOUNT ON` → mỗi INSERT in `(1 row affected)` vào sqlcmd stdout stream ngược qua tunnel. Thêm `SET NOCOUNT ON;` ngay sau `EXECUTE AS LOGIN='sa';` trong cả 2 generator. Quy mô nhỏ hơn exfil (payload MB-scale → ~250-1000 INSERT, ~5-20 KB stdout vs ~480 KB) nhưng cùng bản chất; không có consumer nào parse row-count từ batch stage. Yêu cầu **rebuild controlServer** — thay đổi Go source, khác các fix Python trước.

