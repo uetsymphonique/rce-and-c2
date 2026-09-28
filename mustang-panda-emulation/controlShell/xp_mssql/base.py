@@ -139,11 +139,13 @@ class XpMssqlBase:
         cmd_expr = self._tsql_char34_expr(exe_cmd)
         tsql = (
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @sh INT,@rc INT,@cmd NVARCHAR(4000);"
+            "DECLARE @sh INT,@rc INT,@hr INT,@cmd NVARCHAR(4000);"
             "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
             f"SET @cmd={cmd_expr};"
-            f"EXEC sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,{wait_flag};"
-            "SELECT @rc AS exit_code;"
+            f"EXEC @hr=sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,{wait_flag};"
+            "SELECT @rc AS exit_code,"
+            "CASE @hr WHEN 0 THEN CAST(@rc AS VARCHAR(20)) "
+            "ELSE 'hr='+CAST(@hr AS VARCHAR(20)) END AS run_status;"
             "EXEC sp_OADestroy @sh;"
         )
         out = self._exec_q(shell, tsql)
@@ -161,10 +163,12 @@ class XpMssqlBase:
         cmd_expr = self._tsql_char34_expr(full_cmd)
         wait_tsql = (
             "EXECUTE AS LOGIN='sa';"
-            "DECLARE @sh INT,@rc INT,@cmd NVARCHAR(4000);"
+            "DECLARE @sh INT,@rc INT,@hr INT,@cmd NVARCHAR(4000);"
             "EXEC sp_OACreate 'WScript.Shell',@sh OUT;"
             f"SET @cmd={cmd_expr};"
-            "EXEC sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,1;"
+            "EXEC @hr=sp_OAMethod @sh,'Run',@rc OUT,@cmd,0,1;"
+            "SELECT CASE @hr WHEN 0 THEN CAST(@rc AS VARCHAR(20)) "
+            "ELSE 'hr='+CAST(@hr AS VARCHAR(20)) END AS run_status;"
             "EXEC sp_OADestroy @sh;"
         )
         self._exec_q(shell, wait_tsql)
