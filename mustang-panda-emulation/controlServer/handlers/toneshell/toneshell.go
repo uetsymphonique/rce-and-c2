@@ -486,8 +486,25 @@ func (o *ToneshellHandler) HandleGetResponse(resp ImplantPacket, sessionId strin
             o.baseHandler.HandlerLogSuccess("Successfully downloaded file %s", filePath)
             o.baseHandler.RegisterTaskOutput(sessionId, []byte{})
         } else if taskType == RESP_FILE_UPLOAD {
-            o.baseHandler.HandlerLogSuccess("Successfully uploaded file %s", filePath)
-            o.baseHandler.RegisterTaskOutput(sessionId, []byte{})
+            // Verify the dest file actually received content before claiming
+            // success - HandleFileUpload open/write failures previously left
+            // the task FINISHED with zero bytes on disk (silent content loss,
+            // operator saw "[+] file-get complete" while the file never
+            // existed). Register the failure text as task output so the
+            // operator shell surfaces it.
+            var uploadFailMsg string
+            if stat, statErr := os.Stat(filePath); statErr != nil {
+                uploadFailMsg = fmt.Sprintf("UPLOAD FAILED for %s: dest file missing (%s)", filePath, statErr.Error())
+            } else if stat.Size() == 0 {
+                uploadFailMsg = fmt.Sprintf("UPLOAD FAILED for %s: dest file is empty (0 bytes) - chunk content was never written", filePath)
+            }
+            if uploadFailMsg != "" {
+                o.baseHandler.HandlerLogError(uploadFailMsg)
+                o.baseHandler.RegisterTaskOutput(sessionId, []byte(uploadFailMsg))
+            } else {
+                o.baseHandler.HandlerLogSuccess("Successfully uploaded file %s", filePath)
+                o.baseHandler.RegisterTaskOutput(sessionId, []byte{})
+            }
         }
     default:
         return errors.New("received task response with invalid packet type, dropping output")

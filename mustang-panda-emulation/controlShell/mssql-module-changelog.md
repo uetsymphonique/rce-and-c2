@@ -220,3 +220,29 @@ mkdir /home/kali/Tools/rce-and-c2/mustang-panda-emulation/controlServer/files
 ```
 
 Nếu thiếu: `open .../files/<random>: no such file or directory` — task vẫn FINISHED (vì `RegisterTaskOutput` được gọi sau chunk error), nhưng file content bị mất.
+
+---
+
+## xpexfil-hex timeout + NOCOUNT + upload-dir fixes (2026-09-27/28)
+
+Ba lỗi thực chiến khi exfil `g.dmp` 108 MB (13 chunks) qua `xpexfil-hex`.
+
+### 1. Task timeout của implant không nhận giá trị từ `timeout <seconds>`
+
+**Root cause:** `cmd_exec` / `cmd_exec_raw` build task JSON không có key `timeout` → server (`toneshell.go:634-637`) fallback `DEFAULT_TASK_TIMEOUT = 120` → implant `wait_limit_ms = 120000` (`exec.cpp:63`) dù operator đã `timeout 720`. Batch INSERT ~2 phút trôi qua mốc → implant bắn `FAIL_TASK_TIMEOUT_REACHED (0x60004 = 393220)` qua `NotifyTaskError`.
+
+**Fix** (`c2_client.py`): task JSON cho EXEC giờ có `"timeout": self._timeout_s` (`cmd_exec`) và `"timeout": max(self._timeout_s, timeout_s)` (`cmd_exec_raw`) — lệnh `timeout <n>` và tham số `insert_timeout_s` giờ thật sự đến `task_data->timeout` của implant.
+
+### 2. `(1 row affected)` spam làm batch INSERT chậm + nghẽn stdout
+
+Batch `_build_exfil_insert_tsql` chạy ~27k INSERT; mỗi INSERT in `(1 row affected)` (`-y 0` không truncate) → ~480 KB stdout, implant stream ~250 chunk 1890-byte, pipe backpressure làm batch chậm thêm.
+
+**Fix** (`xp_mssql/exfil.py`): thêm `SET NOCOUNT ON;` ngay sau `EXECUTE AS LOGIN='sa';` trong `_build_exfil_insert_tsql` — stdout còn lại chỉ 3 dòng SELECT cuối. Chỉ áp cho hex-exfil; các batch khác không có loop INSERT qua xp_cmdshell nên giữ nguyên.
+
+### 3. `files/` biến mất giữa chừng → hex0–hex3 "uploaded" ảo, content mất
+
+Repo trên kali bị `git clean`/checkout giữa run → `controlServer/files/` (untracked) biến mất. `HandleFileUpload` open fail ENOENT từng chunk nhưng nhánh `TASK_COMPLETE` vô điều kiện log `Successfully uploaded file` + `RegisterTaskOutput` → task FINISHED → operator thấy `[+] file-get complete` dù đĩa không có gì.
+
+**Fix 1** (`util/util.go`): `os.MkdirAll(UploadDir, 0755)` trong `SetRootDirectories()` — server tự tạo lại dir lúc khởi động, hết cần mkdir tay.
+
+**Fix 2** (`toneshell.go`, nhánh `RESP_FILE_UPLOAD`): trước khi log success, `os.Stat(filePath)` — file missing hoặc 0 byte → log `UPLOAD FAILED for <path>: ...` và register message làm task output; operator shell in ra thay vì success ảo.
