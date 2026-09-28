@@ -286,3 +286,59 @@ Rà soát cả 3 component cho thấy pipeline chỉ cần **2 cơ chế thật*
 - Batch treo quá wait-limit → shell nhận `TASK ERROR: ... 0x60004` ngay — hết zombie RUNNING
 - File lớn qua `get`/`put_wait` → shell đợi đến khi xong
 - Fire-and-forget (`cmd_get`, `xpexec-bg`) không đổi — nạp lệnh bất đồng bộ vẫn nguyên thiết kế
+
+---
+
+## 6. xpstage-hex: direct thành mặc định, masquerade thành opt-in `--stl` (2026-09-29)
+
+Live lab phát hiện: `xprun` (sp_OA `WScript.Shell.Run` → `ShellExecuteEx`) **không chạy được PE unsigned dưới extension lạ** — `go-thehash.stl` không bao giờ đến `main()` (kể cả `-h`), trong khi cùng byte dưới tên `go-thehash.exe` chạy và put DC01 thành công ngay. `cmd.exe` (CreateProcess) chạy `.stl` bình thường, nhưng `xprun` đi qua ShellExecuteEx — cơ chế phân biệt extension/association + trust check. Tool signed (CertEnrollSvc) vẫn chạy được từ `.stl` qua cùng đường, nên masquerade-at-rest chỉ còn giá trị cho payload signed.
+
+### Thiết kế lại cờ (logic: masquerade là opt-in, direct là mặc định)
+
+| Gọi | Kết quả on-disk | Dùng khi |
+|---|---|---|
+| `xpstage-hex <p>` | `<p>` giữ nguyên tên/extension (vd `.exe`), không file trung gian, không MoveFile | Mặc định — payload unsigned chạy qua `xprun` trên IIS01 |
+| `xpstage-hex <p> --stl` | `<stem>.stl` giữ lại ở rest | Payload **signed** (CertEnrollSvc) — ShellExecuteEx chấp nhận |
+| `xpstage-hex <p> --stl --rename` | `<stem>.stl` transient → MoveFile về tên gốc trong cùng decode batch | Payload do đường CreateProcess dispatch nhưng muốn hình ảnh transient .stl |
+
+`--rename` không có `--stl` → lỗi usage (rename chỉ có nghĩa trong chế độ masquerade).
+
+### Thay đổi
+
+- **`xp_mssql/staging.py`** (`cmd_xpstage_hex`): chữ ký đổi `rename` → `stl` + `rename`; `write_path = stl_path if stl else out_path`; validation `rename requires stl`; docstring cập nhật. Size-verify + cleanup giữ nguyên.
+- **`toneshell_shell.py`**: dispatch parse `--stl`/`--rename`; usage + help text.
+- **`README.md`**: bảng lệnh + bảng trade-off disk artifact.
+- **`Flow.md`** (#23): SaveToFile default về `<payload_name>`, masquerade opt-in.
+- **Kế hoạch bỏ hẳn**: mode `--stl --rename` (transient .stl → .exe) định loại vì đến tận cùng vẫn xuất hiện file `.exe` trên đĩa (telemetry file-create `.stl` + rename không còn giá trị che khuất) — giữ tạm thời trước khi dọn plan.
+
+### Hệ quả plan (cần đồng bộ Phase 2/4)
+
+- Phase 4 staging go-thehash → mặc định (direct, `.exe`); các payload DC01-side giữ `.stl` trên **DC01** (go-thehash `put` chọn tên on-disk ở đích — WMI/SCM là CreateProcess, extension-agnostic).
+- Phase 2 staging CertEnrollSvc → `xpstage-hex CertEnrollSvc.exe --stl` (signed, chạy từ `.stl`).
+- Lưu ý chẩn đoán: `xpfile cat` output file có thể là **stale file của lần chạy cũ** — luôn check timestamp/hash trước khi kết luận.
+
+---
+
+## Future works (chưa làm — hết dev effort giai đoạn này)
+
+### Future: channel exec qua WMI COM sp_OA (`SWbemLocator → Win32_Process.Create`)
+
+Ý tưởng từ ràng buộc phát hiện ở mục 6: `xprun` (ShellExecuteEx) chỉ chạy được unsigned PE dưới `.exe`, trong khi mọi đường khác trong pipeline (implant EXEC, xp_cmdshell/cmd, EfsPotato chain, WMI/SCM phía DC01) đều CreateProcess-based — chạy `.stl` bình thường. Một channel exec mới có thể giữ **cả** masquerade `.stl` lẫn tính query-based trên IIS01:
+
+```
+sp_OACreate 'WbemScripting.SWbemLocator'
+→ ConnectServer('.')
+→ Get('Win32_Process')
+→ inParameters = Methods_('Create').inParameters.SpawnInstance_; CommandLine = C:\...\payload.stl ...
+→ ExecMethod_('Create', inParameters)
+```
+
+- Toàn bộ qua `sp_OACreate`/`sp_OAMethod`/`sp_OASetProperty` từ T-SQL — không `xp_cmdshell`, không file staging, không cmd.exe
+- Spawn bởi WmiPrvSE qua CreateProcess — extension-agnostic; process tree mới `sqlservr.exe → WmiPrvSE.exe → payload` cho một observable T1047 riêng
+- Độ khó: chain COM qua SWbemObject/SWbemMethod (SpawnInstance_, property set trên object handle, ExecMethod_) phức tạp hơn đáng kể so với WScript.Shell.Run hiện tại — cần viết + test riêng trước khi đưa vào plan
+- Nguyên tắc ràng buộc: **không** dùng wrapper cmd.exe/PowerShell spawn từ sqlservr để né ShellExecuteEx (dạng `xprun cmd.exe /c payload.stl ...` hay `ProcessStartInfo` qua psh) — mục đích của `xprun` là loại interpreter khỏi process tree, nhét lại wrapper là đi ngược thiết kế
+- API chính thức nhưng không exposé qua OLE: `SEE_MASK_CLASSNAME` + `lpClass="exefile"` của ShellExecuteEx — chỉ dùng được nếu có native helper trên IIS01, mất tính query-based
+
+### Future: bỏ hẳn mode `--stl --rename` (đã note ở mục 6)
+
+Transient `.stl` → MoveFile về `.exe` đến tận cùng vẫn để lại file `.exe` trên đĩa — telemetry file-create `.stl` + rename không còn giá trị che khuất thực sự. Chờ dọn plan xong sẽ loại mode này.

