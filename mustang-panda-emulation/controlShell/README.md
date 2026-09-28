@@ -90,12 +90,12 @@ Default port: `9999` - must match the controlServer REST API port. `--debug` pri
 | `sessions` | List active C2 sessions |
 | `use <session_id>` | Attach the prompt to a session |
 | `detach` | Clear the attached session (local only) |
-| `timeout <seconds>` | Set poll timeout for EXEC tasks (default 120 s) |
+| `timeout <seconds>` | Set the implant wait-limit for EXEC tasks (default 600 s) - if a batch exceeds it the implant sends `TASK ERROR ... 0x60004`; blocking commands wait until the task terminates regardless |
 | `output` | Fetch buffered task output for current session |
 | `get <remote_path>` | Pull file from implant to C2 upload dir (fire-and-forget) |
 | `put <payload_name> <dest_path>` | Push file from C2 payloads dir to implant |
 | `kill` | Prompt then send TERMINATE (id=255) to implant |
-| `<anything else>` | EXEC task (id=5) - run shell command on implant |
+| `<anything else>` | EXEC task (id=5) - run shell command on implant, block until task terminates |
 
 ### xpshell tunnel (sp_OA file staging → xp_cmdshell)
 

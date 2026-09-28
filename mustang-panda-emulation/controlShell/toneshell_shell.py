@@ -95,10 +95,10 @@ class ToneShellShell(C2Client):
 
                 elif cmd == "timeout":
                     if len(parts) < 2:
-                        print(f"[*] poll timeout = {self._timeout_s}s  (usage: timeout <seconds>)")
+                        print(f"[*] implant wait-limit = {self._timeout_s}s  (usage: timeout <seconds>)")
                     else:
                         self._timeout_s = int(parts[1])
-                        print(f"[*] poll timeout set to {self._timeout_s}s")
+                        print(f"[*] implant wait-limit set to {self._timeout_s}s (EXEC tasks block until done)")
 
                 elif cmd == "sessions":
                     self.cmd_sessions()
