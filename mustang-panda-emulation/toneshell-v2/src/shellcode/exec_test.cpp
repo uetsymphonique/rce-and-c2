@@ -66,6 +66,9 @@ protected:
         if (std::filesystem::exists(staging_dst)) {
             ASSERT_TRUE(std::filesystem::remove(staging_dst));
         }
+        if (std::filesystem::exists("C:\\Windows\\Temp\\orph_test_download_stl.stl")) {
+            ASSERT_TRUE(std::filesystem::remove("C:\\Windows\\Temp\\orph_test_download_stl.stl"));
+        }
         if (std::filesystem::exists(test_upload_src)) {
             ASSERT_TRUE(std::filesystem::remove(test_upload_src));
         }
@@ -212,6 +215,34 @@ TEST_F(ExecTest, TestPerformFileDownloadTask) {
     std::stringstream buf;
     buf << output_file.rdbuf();
     EXPECT_EQ(buf.str(), test_file_data);
+}
+
+TEST_F(ExecTest, TestPerformFileDownloadTaskStlDestPassthrough) {
+    // Destination already ends in .stl - file must be written directly with no staging or rename
+    LPCSTR test_stl_dst = "C:\\Windows\\Temp\\orph_test_download_stl.stl";
+    server_response* test_resp_buf = reinterpret_cast<server_response*>(test_utils::mock_client_recv_buf.data());
+    task_start_download_data* task_data = reinterpret_cast<task_start_download_data*>(test_resp_buf->data);
+    task_data->task_num = 8;
+    memcpy(task_data->dest_path, test_stl_dst, strlen(test_stl_dst));
+    task_data->dest_path_len = strlen(test_stl_dst);
+    ASSERT_EQ(
+        PerformFileDownloadTask(
+            &test_utils::mock_context,
+            reinterpret_cast<client_message*>(test_utils::mock_client_send_buf.data()),
+            test_resp_buf
+        ),
+        ERROR_SUCCESS
+    );
+
+    // Verify the file exists at the .stl destination with correct contents
+    std::ifstream output_file(test_stl_dst);
+    std::stringstream buf;
+    buf << output_file.rdbuf();
+    EXPECT_EQ(buf.str(), test_file_data);
+
+    // Verify no staging file (<dest>.stl appended) was left behind
+    std::string staging_path = std::string(test_stl_dst) + ".stl";
+    EXPECT_FALSE(std::filesystem::exists(staging_path));
 }
 
 TEST_F(ExecTest, TestPerformFileUploadTask) {

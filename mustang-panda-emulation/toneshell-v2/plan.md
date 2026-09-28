@@ -1,4 +1,4 @@
-# TONESHELL — Stealth Rewrite Plan
+# TONESHELL - Stealth Rewrite Plan
 
 Kế hoạch thay đổi luồng C2 hiện tại của TONESHELL để giảm bề mặt detection. Đây là **rewrite chính luồng** (không phải variant), chấp nhận drift một phần khỏi MITRE 2025 Mustang Panda Reference Table (rows 168-170: T1218.010 regsvr32, T1218.013 mavinject).
 
@@ -8,7 +8,7 @@ Kế hoạch thay đổi luồng C2 hiện tại của TONESHELL để giảm b�
 - `Handler()` throw + catch → hop (T1622 Debugger Evasion)
 - Authenticode self-sign `wsdapi.dll` (T1553.002 Code Signing)
 - Shellcode: FNV1A API resolve, triple-XOR decrypt, PIC
-- C2 protocol wire (magic `0x18 0x04 0x04`, XOR body, hostname session ID)
+- C2 protocol wire (magic `0xC7 0x3A 0x1F` build default, `TONESHELL_MAGIC_*` options, XOR body, hostname session ID)
 
 **Loại bỏ**:
 - `regsvr32.exe wsdapi.dll` spawn (T1218.010)
@@ -17,7 +17,7 @@ Kế hoạch thay đổi luồng C2 hiện tại của TONESHELL để giảm b�
 
 ---
 
-## 1. Injection chain mới — Early Bird APC + hybrid syscalls
+## 1. Injection chain mới - Early Bird APC + hybrid syscalls
 
 ### 1.1. Chain (actual implementation)
 
@@ -27,11 +27,11 @@ EssosUpdate.exe                                     # sideload trigger (không �
       └─ catch(CustomException&) → InjectAndSpawn() # REWRITE
           ├─ Halos Gate: resolve SSN cho 5 Nt* syscalls từ ntdll in-memory
           ├─ Decrypt shellcode trong local memory (triple-XOR)
-          ├─ CreateProcessW("waitfor.exe", CREATE_SUSPENDED)  # kernel32 — compatible mọi build
+          ├─ CreateProcessW("waitfor.exe", CREATE_SUSPENDED)  # kernel32 - compatible mọi build
           ├─ NtAllocateVirtualMemory(remote, size, RW)         # direct syscall
           ├─ NtWriteVirtualMemory(remote, shellcode)           # direct syscall
-          ├─ NtProtectVirtualMemory(remote, RX)                # direct syscall — RW→RX
-          ├─ NtQueueApcThread(main_thread, shellcode_base)     # direct syscall — Early Bird
+          ├─ NtProtectVirtualMemory(remote, RX)                # direct syscall - RW→RX
+          ├─ NtQueueApcThread(main_thread, shellcode_base)     # direct syscall - Early Bird
           └─ NtResumeThread(main_thread)                       # direct syscall
       shellcode runs trong waitfor.exe → C2 với jitter (mục 2)
 ```
@@ -42,28 +42,28 @@ V1 (cũ): explorer → cmd → EssosUpdate → regsvr32 → waitfor + mavinject 
 V2 (mới): explorer → cmd → EssosUpdate → waitfor                              (3 nodes)
 ```
 
-`wsdapi.dll` Image Load: 3 lần (V1) → 1 lần (V2). Shellcode raw trong waitfor.exe — không DLL, không LoadLibrary.
+`wsdapi.dll` Image Load: 3 lần (V1) → 1 lần (V2). Shellcode raw trong waitfor.exe - không DLL, không LoadLibrary.
 
 ### 1.2. Rationale
 
 | Điểm | Ý nghĩa |
 |---|---|
 | **CreateProcessW** cho spawn | `NtCreateUserProcess` signature thay đổi giữa Windows builds, `PS_CREATE_INFO` union layout mong manh → thực tế không portable. CreateProcessW + CREATE_SUSPENDED ổn định mọi build, process creation từ signed binary ít đáng ngờ. |
-| **5 direct syscalls** cho injection | `NtAllocateVirtualMemory`, `NtWriteVirtualMemory`, `NtProtectVirtualMemory`, `NtQueueApcThread`, `NtResumeThread` — bypass userland EDR hooks ở 5 điểm bị hook nặng nhất. Resolve SSN qua Halos Gate (PEB → ntdll export → check `0xE9` hook → neighbor fallback). |
-| **Ghi shellcode thẳng** (không `LoadLibraryW`) | Loại `Image Load` event cho `wsdapi.dll` trong `waitfor.exe` — dấu hiệu nổi bật nhất của mavinject variant. Đổi lại thêm "unbacked executable memory" — nhưng pattern chung của mọi in-memory loader, ít đặc thù hơn. |
-| **RW → RX transition** (không RWX) | Tránh `PAGE_EXECUTE_READWRITE` — EDR thường flag mọi alloc RWX vào remote process. |
+| **5 direct syscalls** cho injection | `NtAllocateVirtualMemory`, `NtWriteVirtualMemory`, `NtProtectVirtualMemory`, `NtQueueApcThread`, `NtResumeThread` - bypass userland EDR hooks ở 5 điểm bị hook nặng nhất. Resolve SSN qua Halos Gate (PEB → ntdll export → check `0xE9` hook → neighbor fallback). |
+| **Ghi shellcode thẳng** (không `LoadLibraryW`) | Loại `Image Load` event cho `wsdapi.dll` trong `waitfor.exe` - dấu hiệu nổi bật nhất của mavinject variant. Đổi lại thêm "unbacked executable memory" - nhưng pattern chung của mọi in-memory loader, ít đặc thù hơn. |
+| **RW → RX transition** (không RWX) | Tránh `PAGE_EXECUTE_READWRITE` - EDR thường flag mọi alloc RWX vào remote process. |
 | **`waitfor.exe`** làm host | Main thread block trên `WaitForSingleObject` → hợp Early Bird (APC fire khi alertable wait đầu tiên). Microsoft-signed system utility. |
 | **`SUSPENDED` + APC + `Resume`** (Early Bird) | Không cần `SuspendThread`/`GetThreadContext`/`SetThreadContext`. APC fire trước main logic của thread. |
-| **Không cần `regsvr32`** | Chain cũ cần regsvr32 chỉ để có context "sạch" gọi `DllRegisterServer` — giờ decrypt + inject thẳng từ EssosUpdate.exe. |
+| **Không cần `regsvr32`** | Chain cũ cần regsvr32 chỉ để có context "sạch" gọi `DllRegisterServer` - giờ decrypt + inject thẳng từ EssosUpdate.exe. |
 
 ### 1.3. Detection surface mới
 
 | Behavior | Tactic / TID |
 |---|---|
-| Cross-process memory write từ `EssosUpdate.exe` → `waitfor.exe` + `NtQueueApcThread` | Stealth / T1055.004 — Process Injection: Asynchronous Procedure Call |
-| Halos Gate: resolve SSN từ ntdll + invoke `syscall` bypass ntdll stub | Stealth / T1106 — Native API |
-| Decrypt embedded shellcode in local memory | Stealth / T1140 — Deobfuscate/Decode Files or Information |
-| Unbacked executable memory trong `waitfor.exe` (RX không map file) | (memory heuristic — không TID riêng) |
+| Cross-process memory write từ `EssosUpdate.exe` → `waitfor.exe` + `NtQueueApcThread` | Stealth / T1055.004 - Process Injection: Asynchronous Procedure Call |
+| Halos Gate: resolve SSN từ ntdll + invoke `syscall` bypass ntdll stub | Stealth / T1106 - Native API |
+| Decrypt embedded shellcode in local memory | Stealth / T1140 - Deobfuscate/Decode Files or Information |
+| Unbacked executable memory trong `waitfor.exe` (RX không map file) | (memory heuristic - không TID riêng) |
 
 **Rows cũ xoá** khỏi Flow.md + Phase file downstream: T1218.010, T1218.013. **Rows mới thêm**: T1055.004, T1106.
 
@@ -92,11 +92,11 @@ V2 (mới): explorer → cmd → EssosUpdate → waitfor                        
 
 | File | Ghi chú |
 |---|---|
-| `src/common/register.cpp` | Vẫn chứa `RegisterSelf()` + `DllRegisterServer()` — dùng bởi gflagsui target (Protections Test 4). |
+| `src/common/register.cpp` | Vẫn chứa `RegisterSelf()` + `DllRegisterServer()` - dùng bởi gflagsui target (Protections Test 4). |
 | `src/common/register.hpp` | Giữ nguyên. |
-| `src/wsdapi/dllmain.cpp` | Không đổi — `InWaitforProcess()` + `DLL_PROCESS_ATTACH` thread trở thành dead code cho TONESHELL path (vẫn live cho gflagsui). |
+| `src/wsdapi/dllmain.cpp` | Không đổi - `InWaitforProcess()` + `DLL_PROCESS_ATTACH` thread trở thành dead code cho TONESHELL path (vẫn live cho gflagsui). |
 
-### 1.5. Direct syscall — implementation notes
+### 1.5. Direct syscall - implementation notes
 
 - Resolve `ntdll.dll` base từ PEB.Ldr → parse Export Directory → tìm `Nt*`/`Zw*` exports.
 - Stub layout Win10/11 x64: `mov r10, rcx ; mov eax, <SYSCALL_NUM> ; syscall ; ret` → SYSCALL_NUM là dword tại `stub+4`.
@@ -106,7 +106,7 @@ V2 (mới): explorer → cmd → EssosUpdate → waitfor                        
 
 ---
 
-## 2. Adaptive jitter — 2-tier + response bypass ✅ DONE
+## 2. Adaptive jitter - 2-tier + response bypass ✅ DONE
 
 Import chiến lược của `dnscat2/go-client`. TONESHELL persistent TCP, áp dụng ở tầng `PerformTaskLoop`.
 
@@ -114,8 +114,8 @@ Import chiến lược của `dnscat2/go-client`. TONESHELL persistent TCP, áp 
 
 | State | Range | Điều kiện |
 |---|---|---|
-| **Burst** | `0` (immediate) | Server vừa trả task thực (EXEC_CMD / FILE_DOWNLOAD / FILE_UPLOAD / RECONNECT) — beacon ngay để nộp kết quả hoặc nhận task tiếp |
-| **Idle** | 5000 + rand(0..25000) ms → **5–30 s** | Server trả IDLE hoặc beacon lỗi — không có task pending |
+| **Burst** | `0` (immediate) | Server vừa trả task thực (EXEC_CMD / FILE_DOWNLOAD / FILE_UPLOAD / RECONNECT) - beacon ngay để nộp kết quả hoặc nhận task tiếp |
+| **Idle** | 5000 + rand(0..25000) ms → **5–30 s** | Server trả IDLE hoặc beacon lỗi - không có task pending |
 
 ### 2.2. Immediate follow-up after task
 
@@ -166,12 +166,12 @@ Trong `CMakePresets.json::configurePresets[0].cacheVariables`:
 
 | # mới | Behavior | Tactic / TID |
 |---|---|---|
-| — | `wsdapi.dll` resolve syscall numbers từ ntdll in-memory (Halos Gate) | Stealth / T1027.007 — Dynamic API Resolution |
-| — | `wsdapi.dll` decrypt embedded shellcode (triple-XOR) trong local memory | Stealth / T1140 — Deobfuscate/Decode Files or Information |
-| — | `wsdapi.dll` spawn `waitfor.exe` SUSPENDED via `CreateProcessW` | Execution / T1106 — Native API |
-| — | `wsdapi.dll` allocate + write shellcode to `waitfor.exe` remote memory | Stealth / T1055 — Process Injection (parent) |
-| — | `wsdapi.dll` queue APC to main thread + resume (Early Bird) | Stealth / T1055.004 — Process Injection: APC |
-| — | shellcode `PerformTaskLoop` uses adaptive jitter 1-3s active / 5-30s idle | C2 / T1029 — Scheduled Transfer |
+| - | `wsdapi.dll` resolve syscall numbers từ ntdll in-memory (Halos Gate) | Stealth / T1027.007 - Dynamic API Resolution |
+| - | `wsdapi.dll` decrypt embedded shellcode (triple-XOR) trong local memory | Stealth / T1140 - Deobfuscate/Decode Files or Information |
+| - | `wsdapi.dll` spawn `waitfor.exe` SUSPENDED via `CreateProcessW` | Execution / T1106 - Native API |
+| - | `wsdapi.dll` allocate + write shellcode to `waitfor.exe` remote memory | Stealth / T1055 - Process Injection (parent) |
+| - | `wsdapi.dll` queue APC to main thread + resume (Early Bird) | Stealth / T1055.004 - Process Injection: APC |
+| - | shellcode `PerformTaskLoop` uses adaptive jitter 1-3s active / 5-30s idle | C2 / T1029 - Scheduled Transfer |
 
 Chạy `/document-flow` lại và `/map-technique` cho các hàng mới sau khi implement xong.
 
@@ -179,28 +179,28 @@ Chạy `/document-flow` lại và `/map-technique` cho các hàng mới sau khi 
 
 ## 4. Roadmap implement
 
-1. **Phase A — syscalls + injection chain** ✅ DONE
+1. **Phase A - syscalls + injection chain** ✅ DONE
    - [x] Thêm `enable_language(ASM_MASM)` vào root `CMakeLists.txt`
    - [x] Viết `src/common/syscalls.hpp` (Halos Gate resolver + structs + externs)
    - [x] Viết `src/common/syscalls.asm` (ML64 stubs: 6 hàm Nt*, dùng 5)
    - [x] Viết `src/common/syscalls.cpp` (Halos Gate implementation)
    - [x] Viết `src/common/inject.hpp` + `src/common/inject.cpp` (InjectAndSpawn)
-   - [x] Sửa `handler.cpp` — `#ifdef TONESHELL_DIRECT_SYSCALL` switch
+   - [x] Sửa `handler.cpp` - `#ifdef TONESHELL_DIRECT_SYSCALL` switch
    - [x] Xoá `DllRegisterServer` khỏi `wsdapi.def`
    - [x] Xoá `DLL_REG_LOG_FILE` khỏi `src/wsdapi/CMakeLists.txt`
-   - [x] Update `src/wsdapi/CMakeLists.txt` — add new files, remove register.cpp
+   - [x] Update `src/wsdapi/CMakeLists.txt` - add new files, remove register.cpp
    - [x] Rebuild + test: decrypt OK, inject OK, C2 beacon OK
 
-2. **Phase B — jitter (mục 2)** ✅ DONE
+2. **Phase B - jitter (mục 2)** ✅ DONE
    - [x] Thêm 4 cache vars vào `CMakePresets.json`
    - [x] Thêm `-DTONESHELL_JITTER_*` compile definitions vào `src/shellcode/CMakeLists.txt`
    - [x] Thêm `GetTickCount64_t` + `fp_GetTickCount64` vào `func_pointers`
    - [x] Thêm resolve `GetTickCount64` từ kernel32 trong `FetchFunctions`
    - [x] Viết `xorshift64` helper trong `src/shellcode/prng.hpp`
-   - [x] Sửa `PerformTaskLoop` trong `entry.cpp` — 2-tier jitter + immediate follow-up
+   - [x] Sửa `PerformTaskLoop` trong `entry.cpp` - 2-tier jitter + immediate follow-up
    - [x] Test end-to-end với controlServer: beacon confirmed
 
-3. **Phase C — docs**
+3. **Phase C - docs**
    - [ ] Update `Flow.md` (xoá 5 rows cũ, thêm 5 rows mới)
    - [ ] Chạy `/map-technique` cho rows mới
    - [ ] Update `README.md`: đổi mô tả chain (bỏ regsvr32/mavinject), thêm section jitter

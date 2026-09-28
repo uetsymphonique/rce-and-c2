@@ -2,7 +2,7 @@
 
 **Status:** P1 implemented (dedicated `xpagent` database — deviations from original `tempdb` design documented in `xpagent_init.sql`). P2/P3 designed below.
 **Replaces:** per-command `.bat`/`.ps1` staging in the `XpMssql` module (`toneshell_shell.py`)
-**Related docs:** [`mssql-module-changelog.md`](mssql-module-changelog.md), [`xpexfil-design.md`](xpexfil-design.md), [`README.md`](README.md)
+**Related docs:** [`mssql-module-changelog.md`](mssql-module-changelog.md), [`README.md`](README.md)
 
 ---
 

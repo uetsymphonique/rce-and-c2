@@ -6,18 +6,20 @@ Static patterns detectable per layer, với source location và cách sửa. Kh�
 
 ## Layer 1 — Network wire
 
-### 1.1 Magic bytes `0x18 0x04 0x04`
+### 1.1 Magic bytes `0xC7 0x3A 0x1F`
 
 **Source:** `src/shellcode/comms.cpp`
-- `SetClientMsg` line 329: `unsigned char magic[3] = {0x18, 0x04, 0x04};`
-- `ValidateMagic` line 367: `unsigned char magic[3] = {0x18, 0x04, 0x04};`
+- `SetClientMsg` line 339: `unsigned char magic[3] = {TONESHELL_MAGIC_0, TONESHELL_MAGIC_1, TONESHELL_MAGIC_2};`
+- `ValidateMagic` line 377: same — bytes required at compile time (`#error` if unset), values from `CMakePresets.json` (`TONESHELL_MAGIC_*`, default `0xC7/0x3A/0x1F`).
 
 **Pattern:** Bytes đầu tiên của mọi packet cả 2 chiều (client→server và server→client), plaintext, không bao giờ encrypted.
 
 **Detection rule example:**
 ```
-alert tcp any any -> any 8443 (content:"|18 04 04|"; offset:0; depth:3; msg:"TONESHELL magic";)
+alert tcp any any -> any 8443 (content:"|C7 3A 1F|"; offset:0; depth:3; msg:"TONESHELL magic";)
 ```
+
+> Upstream MITRE dùng `0x18 0x04 0x04`; malware gốc dùng `0x17 0x03 0x03` (giả TLS). Rule phải khớp giá trị thật của build — đổi `TONESHELL_MAGIC_*` là đổi luôn rule.
 
 **Trạng thái: ✅ ĐÃ FIX** — magic bytes hiện là compile-time define.
 
@@ -240,7 +242,7 @@ static void patch_stub(uint8_t* stub_addr, uint32_t ssn) {
 
 | Pattern | Effort sửa | Detection value | Ưu tiên |
 |---|---|---|---|
-| Magic bytes `0x18 0x04 0x04` | Rất thấp (2 dòng) | Rất cao (network YARA/Snort) | **1** |
+| Magic bytes `0xC7 0x3A 0x1F` (build default, `TONESHELL_MAGIC_*`) | Rất thấp (đổi preset) | Rất cao (network YARA/Snort) | **1** |
 | FNV1A constants `0x811c9dc5 / 0x1000193` | Thấp (đổi algo) | Cao (binary YARA) | **2** |
 | AES-CTR key log | Thấp (derive runtime) | Trung bình (file IoC) | **3** |
 | TripleXor offsets `0,1,7` | Thấp (đổi set) | Trung bình (shellcode fingerprint) | **4** |

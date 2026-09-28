@@ -13,13 +13,13 @@ The TONESHELL TCP Handler functions as the server-side counterpart to the TONESH
 
 The handler consists of a TCP listener that listens on a specified address/port.
 
-All communications between the TONESHELL implant and the C2 server will begin with the magic bytes `0x18 0x04 0x04`. The first implant packet handshake request will include the victim hostname as the message specific packet data.
+All communications between the TONESHELL implant and the C2 server will begin with the magic bytes `0xC7 0x3A 0x1F` (package default in `toneshell.go`; overridable per-handler via the `magic_bytes` YAML value, a 3-byte hex string — e.g. `"c73a1f"`). The first implant packet handshake request will include the victim hostname as the message specific packet data.
 
 The implant packet structure is as follows:
 
 | Offset | Size | Field Name/Description |
 | -------- | ------- | ------- |
-| 0x0 | 0x3 | Magic bytes signature: `0x18 0x04 0x04` |
+| 0x0 | 0x3 | Magic bytes signature: `0xC7 0x3A 0x1F` |
 | 0x3 | 0x2 | Size of data after encryption key |
 | 0x5 | 0x100 | XOR/RC4 data encryption key |
 | 0x105 | 0x10 | Unique victim ID |
@@ -33,7 +33,7 @@ C2 server packet structure:
 
 | Offset | Size | Field Name/Description |
 | -------- | ------- | ------- |
-| 0x0 | 0x3 | Magic bytes signature: `0x18 0x04 0x04` |
+| 0x0 | 0x3 | Magic bytes signature: `0xC7 0x3A 0x1F` |
 | 0x3 | 0x2 | Size of remaining bytes (including message type) |
 | 0x5 | 0x1 | Message type |
 | 0x6 | x | Message-specific data |
@@ -93,6 +93,7 @@ toneshell:
   port: 8080
   enabled: true
   encryption_type: XOR
+  # magic_bytes: c73a1f  # optional — override the default 3-byte magic
 ```
 
 - Valid `encryption_type` values are `XOR` and `RC4`. To skip encryption, leave the entire `encryption_type` field out.

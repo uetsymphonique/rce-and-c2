@@ -1,6 +1,6 @@
 """
 Decrypt TONESHELL encrypted log files.
-Usage: python aes_base64_log_decryptor.py -i <input> -o <output> --aes-256-ctr -k <hexkey>
+Usage: python aes_base64_log_decryptor.py -i <input> -o <output> -k <hexkey>
 """
 import argparse
 import base64
